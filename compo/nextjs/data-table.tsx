@@ -10,18 +10,11 @@ import {
   getSortedRowModel,
   SortingState,
   PaginationState,
-  ColumnFiltersState,
-  getFilteredRowModel,
 } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
-type PaginationMeta = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
+import { PaginationMeta } from "@/types/global.types";
 import {
   Table,
   TableBody,
@@ -34,6 +27,7 @@ import {
 import { DataTablePagination } from "./data-table-pagination";
 import { ScrollArea, ScrollBar } from "../scroll-area";
 import { cn } from "@/lib/utils";
+import { useSmartFilter } from "@/hooks/useSmartFilter";
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
 declare module "@tanstack/react-table" {
@@ -60,12 +54,24 @@ export function DataTable<TData, TValue>({
   searchKey,
   showFooter = false,
 }: DataTableProps<TData, TValue>) {
+  const { updateFilter, getFilter } = useSmartFilter({ defaultDebounce: 500 });
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [pagination, setPagination] = React.useState<PaginationState>({
     pageIndex: meta ? meta.page - 1 : 0,
     pageSize: limit,
   });
+
+  // Local state for search to ensure smooth typing UX
+  const [searchValue, setSearchValue] = React.useState(
+    searchKey ? getFilter(searchKey) : ""
+  );
+
+  // Sync local search value with URL (for back/forward navigation)
+  React.useEffect(() => {
+    if (searchKey) {
+      setSearchValue(getFilter(searchKey));
+    }
+  }, [getFilter, searchKey]);
 
   // Update pagination state when limit or meta changes
   React.useEffect(() => {
@@ -80,18 +86,21 @@ export function DataTable<TData, TValue>({
   const table = useReactTable({
     data,
     columns,
-    pageCount: meta 
-      ? (meta.totalPages ?? Math.ceil(meta.total / meta.limit)) 
+    pageCount: meta
+      ? (meta.totalPages ?? Math.ceil(meta.total / meta.limit))
       : undefined,
     state: {
       sorting,
-      columnFilters,
       pagination,
     },
-    onPaginationChange: setPagination,
-    onColumnFiltersChange: setColumnFilters,
-    getFilteredRowModel: getFilteredRowModel(),
+    onPaginationChange: (updater) => {
+      const nextState = typeof updater === "function" ? updater(pagination) : updater;
+      setPagination(nextState);
+      
+      updateFilter("page", nextState.pageIndex + 1);
+    },
     manualPagination: !!meta,
+    manualFiltering: true,
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -101,15 +110,20 @@ export function DataTable<TData, TValue>({
   return (
     <div className="space-y-4">
       {searchKey && (
-        <div className="flex items-center">
-          <Input
-            placeholder={`Filter ${searchKey}...`}
-            value={(table.getColumn(searchKey)?.getFilterValue() as string) ?? ""}
-            onChange={(event) =>
-              table.getColumn(searchKey)?.setFilterValue(event.target.value)
-            }
-            className="max-w-xs rounded-full"
-          />
+        <div className="flex w-full items-center">
+          <div className="flex items-center relative group">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+            <Input
+              placeholder={`Search...`}
+              value={searchValue}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSearchValue(value);
+                updateFilter(searchKey, value);
+              }}
+              className="pl-10 md:max-w-68 w-full"
+            />
+          </div>
         </div>
       )}
       <ScrollArea className="max-w-[calc(100vw-40px)] md:max-w-[calc(100vw-56px)] lg:max-w-[calc(100vw-311px)] xl:w-full rounded-lg border whitespace-nowrap">
@@ -197,9 +211,9 @@ export function DataTable<TData, TValue>({
                       {footer.isPlaceholder
                         ? null
                         : flexRender(
-                            footer.column.columnDef.footer,
-                            footer.getContext()
-                          )}
+                          footer.column.columnDef.footer,
+                          footer.getContext()
+                        )}
                     </TableCell>
                   ))}
                 </TableRow>
