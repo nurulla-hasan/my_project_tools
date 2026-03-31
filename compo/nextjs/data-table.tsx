@@ -6,7 +6,6 @@ import {
   flexRender,
   getCoreRowModel,
   useReactTable,
-  getPaginationRowModel,
   getSortedRowModel,
   SortingState,
   PaginationState,
@@ -99,12 +98,11 @@ export function DataTable<TData, TValue>({
       
       updateFilter("page", nextState.pageIndex + 1);
     },
-    manualPagination: !!meta,
+    manualPagination: true,
     manualFiltering: true,
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
