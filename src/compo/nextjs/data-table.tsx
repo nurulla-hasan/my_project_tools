@@ -24,7 +24,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "./data-table-pagination";
-import { ScrollArea, ScrollBar } from "../scroll-area";
 import { cn } from "@/lib/utils";
 import { useSmartFilter } from "@/hooks/useSmartFilter";
 
@@ -124,7 +123,7 @@ export function DataTable<TData, TValue>({
           </div>
         </div>
       )}
-      <ScrollArea className="max-w-[calc(100vw-40px)] md:max-w-[calc(100vw-56px)] lg:max-w-[calc(100vw-311px)] xl:w-full rounded-lg border whitespace-nowrap">
+      <div className="w-full rounded-lg border overflow-x-auto">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -219,8 +218,7 @@ export function DataTable<TData, TValue>({
             </TableFooter>
           )}
         </Table>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
+      </div>
 
       <React.Suspense fallback={null}>
         {(meta || table.getPageCount() > 1) && (
