@@ -1,4 +1,3 @@
-   
 import { 
   useState, 
   useMemo, 
@@ -44,7 +43,7 @@ type BaseParams = {
  * Hook Configuration Options
  */
 type SmartFetchOptions<P> = Partial<P> & {
-  skip?: boolean; // Added skip support
+  skip?: boolean;
 };
 
 /**
@@ -70,11 +69,11 @@ export type UseSmartFetchReturn<P extends BaseParams, T> = {
 };
 
 /**
- * Type definition for the query function (updated to accept skip)
+ * Type definition for the query function (compatible with RTK Query)
  */
 type QueryHook<P extends BaseParams, T> = (
   params: P,
-  options?: { skip?: boolean } // Accept skip in query hook options
+  options?: { skip?: boolean }
 ) => {
   data?: ApiListResponse<T>;
   isLoading: boolean;
@@ -84,8 +83,9 @@ type QueryHook<P extends BaseParams, T> = (
 };
 
 /**
- * useSmartFetchHook - Optimized for React 18/19
- * Now supports dynamic 'skip' to conditionally pause API requests.
+ * useSmartFetchHook - The Ultimate "Senior Architect" Version
+ * Optimized for React 18/19 & Next.js Ecosystem.
+ * Handles: Stable Dependencies, Optimistic UI, Smart Debouncing, and Conditional Fetching.
  */
 const useSmartFetchHook = <P extends BaseParams, T>(
   queryHook: QueryHook<P, T>,
@@ -96,25 +96,39 @@ const useSmartFetchHook = <P extends BaseParams, T>(
   const skip = options.skip ?? false;
   const optionLimit = options.limit;
 
+  // --- THE "PONDITI" LOGIC (Deep Compare initialParams) ---
+  // This ensures that even if a new object { status: 'active' } is passed on every render,
+  // the hook won't re-trigger unless the values inside actually change.
+  const initialParamsRef = useRef(initialParams);
+  const initialParamsString = JSON.stringify(initialParams);
+  
+  const stableInitialParams = useMemo(() => {
+    initialParamsRef.current = initialParams;
+    return initialParams;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialParamsString]);
+
   // Memoize default values to maintain reference stability
   const defaultValues = useMemo(() => ({
     page: 1,
     limit: optionLimit ?? 10,
-    ...initialParams
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization
-  }), [initialParams, optionLimit]);
+    ...stableInitialParams
+  }), [stableInitialParams, optionLimit]);
+  // --------------------------------------------------------
 
   const [filter, setFilterState] = useState<Partial<P>>(defaultValues);
   const [queryParams, setQueryParams] = useState<Partial<P>>(defaultValues);
   const [isPending, startTransition] = useTransition();
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Cleanup timer on unmount to prevent memory leaks
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
   }, []);
 
+  // Execute query hook with skip support
   const {
     data,
     isLoading,
@@ -123,6 +137,9 @@ const useSmartFetchHook = <P extends BaseParams, T>(
     refetch: originalRefetch
   } = queryHook(queryParams as P, { skip });
 
+  /**
+   * Updates filters with optional debouncing and smart pagination reset.
+   */
   const setFilter = useCallback((
     update: SetStateAction<Partial<P>>, 
     config?: { resetPage?: boolean; debounce?: boolean }
@@ -130,10 +147,12 @@ const useSmartFetchHook = <P extends BaseParams, T>(
     const isDebounceRequired = config?.debounce ?? false;
 
     const resolveNewState = (prev: Partial<P>) => {
+      // Logic for functional updates: setFilter(prev => ({...}))
       const next = typeof update === 'function' 
         ? (update as (prev: Partial<P>) => Partial<P>)(prev) 
         : update;
       
+      // Auto-reset page to 1 if any filter changes, unless page is provided or disabled in config
       const shouldResetPage = config?.resetPage ?? !('page' in next);
       
       return {
@@ -155,6 +174,7 @@ const useSmartFetchHook = <P extends BaseParams, T>(
           });
         }, 500);
       } else {
+        // Instant update for non-debounced fields (like Pagination or Radios)
         startTransition(() => {
           setQueryParams(newState);
         });
@@ -164,10 +184,16 @@ const useSmartFetchHook = <P extends BaseParams, T>(
     });
   }, [setQueryParams, startTransition, setFilterState]);
 
+  /**
+   * Specifically for page navigation (Always instant)
+   */
   const setPage = useCallback((page: number) => {
     setFilter({ page } as Partial<P>, { resetPage: false, debounce: false });
   }, [setFilter]);
 
+  /**
+   * Resets entire UI state and API query to initial values
+   */
   const resetFilters = useCallback(() => {
     startTransition(() => {
       setFilterState(defaultValues);
@@ -175,10 +201,14 @@ const useSmartFetchHook = <P extends BaseParams, T>(
     });
   }, [defaultValues, startTransition, setFilterState, setQueryParams]);
 
+  /**
+   * Manual refetch trigger
+   */
   const refetch = useCallback(() => {
     if (originalRefetch) {
       originalRefetch();
     } else {
+      // Trigger a state change to force the query to run again if refetch is unavailable
       setQueryParams(prev => ({ ...prev }));
     }
   }, [originalRefetch, setQueryParams]);
