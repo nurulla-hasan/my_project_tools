@@ -10,17 +10,17 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useSmartFilter } from "@/hooks/useSmartFilter";
 import React from "react";
-
-type PaginationMeta = {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-};
+import { PaginationMeta } from "@/types/global.type";
 
 interface DataTablePaginationProps<TData> {
   table: Table<TData>;
@@ -31,28 +31,31 @@ export function DataTablePagination<TData>({
   table,
   meta,
 }: DataTablePaginationProps<TData>) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const { updateFilter } = useSmartFilter();
 
   React.useEffect(() => {
     if (meta) {
       const totalPages = meta.totalPages ?? Math.ceil(meta.total / meta.limit);
 
       if (meta.page > totalPages && totalPages > 0) {
-        const params = new URLSearchParams(window.location.search);
-        params.set("page", totalPages.toString());
-        router.push(`${pathname}?${params.toString()}`);
+        updateFilter("page", totalPages, { resetPage: false });
       }
     }
-  }, [meta, pathname, router]);
+  }, [meta, updateFilter]);
 
   // Handle server-side pagination URL updates
   const handlePageChange = (page: number) => {
     if (meta) {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("page", page.toString());
-      router.push(`${pathname}?${params.toString()}`);
+      updateFilter("page", page, { resetPage: false });
+    }
+  };
+
+  const handleLimitChange = (value: string) => {
+    const limit = Number(value);
+    if (meta) {
+      updateFilter("limit", limit);
+    } else {
+      table.setPageSize(limit);
     }
   };
 
@@ -76,7 +79,30 @@ export function DataTablePagination<TData>({
           </>
         )}
       </div>
-      <div className="flex items-center">
+      <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 lg:gap-8">
+        <div className="flex items-center gap-2">
+          <p className="whitespace-nowrap text-sm font-medium">Rows per page</p>
+          <Select
+            value={`${meta ? meta.limit : table.getState().pagination.pageSize}`}
+            onValueChange={handleLimitChange}
+          >
+            <SelectTrigger size="sm">
+              <SelectValue
+                placeholder={
+                  meta ? meta.limit : table.getState().pagination.pageSize
+                }
+              />
+            </SelectTrigger>
+            <SelectContent side="top">
+              {[10, 20, 30, 40, 50].map((pageSize) => (
+                <SelectItem key={pageSize} value={`${pageSize}`}>
+                  {pageSize}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center">
           <Pagination>
             <PaginationContent className="gap-1">
               <PaginationItem>
@@ -102,22 +128,32 @@ export function DataTablePagination<TData>({
               const totalPages = table.getPageCount();
               const pages: (number | string)[] = [];
 
-              if (totalPages <= 5) {
+              if (totalPages <= 8) {
                 for (let i = 1; i <= totalPages; i++) {
                   pages.push(i);
                 }
               } else {
-                pages.push(1);
-                if (page > 3) pages.push("...");
-                for (
-                  let i = Math.max(2, page - 1);
-                  i <= Math.min(totalPages - 1, page + 1);
-                  i++
-                ) {
+                // Left boundary: 3 pages
+                pages.push(1, 2, 3);
+
+                if (page > 4) {
+                  pages.push("...");
+                }
+
+                // Middle section
+                const start = Math.max(4, page - 1);
+                const end = Math.min(totalPages - 2, page + 1);
+
+                for (let i = start; i <= end; i++) {
                   pages.push(i);
                 }
-                if (page < totalPages - 2) pages.push("...");
-                pages.push(totalPages);
+
+                if (page < totalPages - 3) {
+                  pages.push("...");
+                }
+
+                // Right boundary: 2 pages
+                pages.push(totalPages - 1, totalPages);
               }
 
               return pages.map((pageNumItem, idx) => {
@@ -144,7 +180,6 @@ export function DataTablePagination<TData>({
                         }
                       }}
                       isActive={isActive}
-                      className="h-8 w-8 p-0 cursor-pointer text-xs"
                     >
                       {pageNum}
                     </PaginationLink>
@@ -166,7 +201,6 @@ export function DataTablePagination<TData>({
                   }
                 }}
                 className={cn(
-                  "h-8 w-8 sm:w-auto p-0 sm:px-3 cursor-pointer",
                   !table.getCanNextPage() && "pointer-events-none opacity-50",
                 )}
               />
@@ -175,5 +209,6 @@ export function DataTablePagination<TData>({
         </Pagination>
       </div>
     </div>
-  );
+  </div>
+);
 }
