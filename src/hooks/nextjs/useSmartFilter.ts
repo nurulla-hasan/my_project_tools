@@ -38,37 +38,6 @@ export interface ClearAllOptions {
 // Main Hook
 // ============================================
 
-/**
- * A powerful hook for managing URL search parameters in Next.js App Router.
- * 
- * Features:
- * - Debouncing for search/filter inputs
- * - Batch updates for multiple filters at once
- * - Toggle support for multi-select filters
- * - Automatic pagination reset on filter change
- * - Type-safe parameter keys
- * - Memory leak prevention
- * 
- * @example
- * ```tsx
- * const { updateFilter, getFilter, clearAll } = useSmartFilter<"search" | "status">();
- * 
- * // Debounced search
- * <input 
- *   value={getFilter("search")} 
- *   onChange={(e) => updateFilter("search", e.target.value, { debounce: 300 })}
- * />
- * 
- * // Status filter
- * <select 
- *   value={getFilter("status")} 
- *   onChange={(e) => updateFilter("status", e.target.value)}
- * />
- * 
- * // Clear all filters
- * <button onClick={() => clearAll()}>Reset</button>
- * ```
- */
 export const useSmartFilter = <T extends string = string>(
   config: SmartFilterConfig = {}
 ) => {
