@@ -34,6 +34,9 @@ export interface ClearAllOptions {
   method?: "push" | "replace";
 }
 
+// Global key for stable batching to prevent race conditions
+const BATCH_KEY = "___global_batch_update___";
+
 // ============================================
 // Main Hook
 // ============================================
@@ -61,6 +64,7 @@ export const useSmartFilter = <T extends string = string>(
   // Sync optimistic state when URL actually changes (e.g. back/forward button)
   useEffect(() => {
     const currentParams = searchParams.toString();
+    // Architectural Guard: Only update state if the string representation has actually changed
     if (optimisticParams.toString() !== currentParams) {
       setOptimisticParams(new URLSearchParams(currentParams));
     }
@@ -93,7 +97,8 @@ export const useSmartFilter = <T extends string = string>(
 
       // 1. Update UI state immediately (Optimistic Update)
       setOptimisticParams((prev) => {
-        const next = new URLSearchParams(prev.toString());
+        // Optimization: Use native constructor for cloning instead of serialization
+        const next = new URLSearchParams(prev);
         if (value !== null && value !== undefined && value !== "") {
           next.set(key, String(value));
         } else {
@@ -115,7 +120,7 @@ export const useSmartFilter = <T extends string = string>(
         const params = new URLSearchParams(searchParams.toString());
 
         if (value !== null && value !== undefined && value !== "") {
-          // Validate pagination
+          // Pagination Validation
           if (key === paginationKey && (Number(value) < 1 || isNaN(Number(value)))) return;
           params.set(key, String(value));
         } else {
@@ -163,7 +168,7 @@ export const useSmartFilter = <T extends string = string>(
 
       // 1. Update UI state immediately (Optimistic)
       setOptimisticParams((prev) => {
-        const next = new URLSearchParams(prev.toString());
+        const next = new URLSearchParams(prev);
         let changed = false;
         Object.entries(updates).forEach(([key, value]) => {
           if (value !== null && value !== undefined && value !== "") {
@@ -177,10 +182,9 @@ export const useSmartFilter = <T extends string = string>(
         return next;
       });
 
-      // 2. Clear existing timeouts
-      const batchKey = `__batch_${Math.random()}`;
-      if (timeoutRefs.current[batchKey]) {
-        clearTimeout(timeoutRefs.current[batchKey]);
+      // 2. Clear existing timeouts for stable batching (Fixes potential race conditions)
+      if (timeoutRefs.current[BATCH_KEY]) {
+        clearTimeout(timeoutRefs.current[BATCH_KEY]);
       }
 
       const executeUpdate = () => {
@@ -209,11 +213,11 @@ export const useSmartFilter = <T extends string = string>(
           router.push(url, { scroll });
         }
         
-        delete timeoutRefs.current[batchKey];
+        delete timeoutRefs.current[BATCH_KEY];
       };
 
       if (debounce > 0) {
-        timeoutRefs.current[batchKey] = setTimeout(executeUpdate, debounce);
+        timeoutRefs.current[BATCH_KEY] = setTimeout(executeUpdate, debounce);
       } else {
         executeUpdate();
       }
@@ -250,7 +254,7 @@ export const useSmartFilter = <T extends string = string>(
       
       // 1. Update UI immediately
       setOptimisticParams(prev => {
-        const next = new URLSearchParams(prev.toString());
+        const next = new URLSearchParams(prev);
         Array.from(next.keys()).forEach(key => {
           if (!exclude.includes(key)) next.delete(key);
         });
