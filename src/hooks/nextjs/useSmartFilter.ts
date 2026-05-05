@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 
 // ============================================
 // Type Definitions
@@ -38,6 +38,10 @@ export interface ClearAllOptions {
 // Main Hook
 // ============================================
 
+/**
+ * A powerful hook for managing URL search parameters in Next.js App Router.
+ * Features Optimistic UI updates to eliminate input lag.
+ */
 export const useSmartFilter = <T extends string = string>(
   config: SmartFilterConfig = {}
 ) => {
@@ -45,16 +49,28 @@ export const useSmartFilter = <T extends string = string>(
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
+  
+  // Use ReturnType to avoid environment conflicts (Browser vs Node) for setTimeout
+  const timeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  
+  // Optimistic UI State to keep input response instantaneous
+  const [optimisticParams, setOptimisticParams] = useState(() => 
+    new URLSearchParams(searchParams.toString())
+  );
 
-  // ============================================
-  // Cleanup on unmount
-  // ============================================
+  // Sync optimistic state when URL actually changes (e.g. back/forward button)
+  useEffect(() => {
+    const currentParams = searchParams.toString();
+    if (optimisticParams.toString() !== currentParams) {
+      setOptimisticParams(new URLSearchParams(currentParams));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Cleanup pending timeouts on unmount
   useEffect(() => {
     return () => {
-      // Clear all pending timeouts to prevent memory leaks
       Object.values(timeoutRefs.current).forEach(clearTimeout);
-      timeoutRefs.current = {};
     };
   }, []);
 
@@ -67,7 +83,6 @@ export const useSmartFilter = <T extends string = string>(
       value: string | number | null | undefined,
       options: SmartFilterOptions | number = {}
     ) => {
-      // Handle legacy debounceTime as 3rd argument (backward compatibility)
       const opt = typeof options === "number" ? { debounce: options } : options;
       const {
         debounce = defaultDebounce,
@@ -76,45 +91,51 @@ export const useSmartFilter = <T extends string = string>(
         method = "push",
       } = opt;
 
-      // Clear existing timeout for this key
+      // 1. Update UI state immediately (Optimistic Update)
+      setOptimisticParams((prev) => {
+        const next = new URLSearchParams(prev.toString());
+        if (value !== null && value !== undefined && value !== "") {
+          next.set(key, String(value));
+        } else {
+          next.delete(key);
+        }
+        if (resetPage && key !== paginationKey) {
+          next.set(paginationKey, "1");
+        }
+        return next;
+      });
+
+      // 2. Clear existing debounce timeout for this key
       if (timeoutRefs.current[key]) {
         clearTimeout(timeoutRefs.current[key]);
-        delete timeoutRefs.current[key];
       }
 
+      // 3. Update Real URL (Debounced)
       const executeUpdate = () => {
         const params = new URLSearchParams(searchParams.toString());
 
-        // Set or delete parameter
         if (value !== null && value !== undefined && value !== "") {
-          // Validate page number if updating pagination
-          if (key === paginationKey) {
-            const pageNum = Number(value);
-            if (isNaN(pageNum) || pageNum < 1) {
-              console.warn(`[useSmartFilter] Invalid page number: ${value}`);
-              return;
-            }
-          }
+          // Validate pagination
+          if (key === paginationKey && (Number(value) < 1 || isNaN(Number(value)))) return;
           params.set(key, String(value));
         } else {
           params.delete(key);
         }
 
-        // Reset pagination when other filters change
         if (resetPage && key !== paginationKey) {
           params.set(paginationKey, "1");
         }
 
-        // Navigate
         const url = `${pathname}?${params.toString()}`;
         if (method === "replace") {
           router.replace(url, { scroll });
         } else {
           router.push(url, { scroll });
         }
+        
+        delete timeoutRefs.current[key];
       };
 
-      // Execute with or without debounce
       if (debounce > 0) {
         timeoutRefs.current[key] = setTimeout(executeUpdate, debounce);
       } else {
@@ -132,7 +153,6 @@ export const useSmartFilter = <T extends string = string>(
       updates: Partial<Record<T, string | number | null | undefined>>,
       options: SmartFilterOptions | number = {}
     ) => {
-      // Handle legacy debounceTime as 2nd argument
       const opt = typeof options === "number" ? { debounce: options } : options;
       const {
         debounce = defaultDebounce,
@@ -141,63 +161,59 @@ export const useSmartFilter = <T extends string = string>(
         method = "push",
       } = opt;
 
-      const keys = Object.keys(updates) as T[];
-
-      // Clear existing timeouts for all updated keys
-      keys.forEach((key) => {
-        if (timeoutRefs.current[key]) {
-          clearTimeout(timeoutRefs.current[key]);
-          delete timeoutRefs.current[key];
-        }
+      // 1. Update UI state immediately (Optimistic)
+      setOptimisticParams((prev) => {
+        const next = new URLSearchParams(prev.toString());
+        let changed = false;
+        Object.entries(updates).forEach(([key, value]) => {
+          if (value !== null && value !== undefined && value !== "") {
+            next.set(key, String(value));
+          } else {
+            next.delete(key);
+          }
+          if (key !== paginationKey) changed = true;
+        });
+        if (resetPage && changed) next.set(paginationKey, "1");
+        return next;
       });
+
+      // 2. Clear existing timeouts
+      const batchKey = `__batch_${Math.random()}`;
+      if (timeoutRefs.current[batchKey]) {
+        clearTimeout(timeoutRefs.current[batchKey]);
+      }
 
       const executeUpdate = () => {
         const params = new URLSearchParams(searchParams.toString());
         let hasFilterChanged = false;
 
-        // Apply all updates
         Object.entries(updates).forEach(([key, value]) => {
           if (value !== null && value !== undefined && value !== "") {
-            // Validate page number
-            if (key === paginationKey) {
-              const pageNum = Number(value);
-              if (isNaN(pageNum) || pageNum < 1) {
-                console.warn(`[useSmartFilter] Invalid page number: ${value}`);
-                return;
-              }
-            }
+            // Validate pagination
+            if (key === paginationKey && (Number(value) < 1 || isNaN(Number(value)))) return;
             params.set(key, String(value));
           } else {
             params.delete(key);
           }
-
-          if (key !== paginationKey) {
-            hasFilterChanged = true;
-          }
+          if (key !== paginationKey) hasFilterChanged = true;
         });
 
-        // Reset pagination if non-page filters changed
         if (resetPage && hasFilterChanged) {
           params.set(paginationKey, "1");
         }
 
-        // Navigate
         const url = `${pathname}?${params.toString()}`;
         if (method === "replace") {
           router.replace(url, { scroll });
         } else {
           router.push(url, { scroll });
         }
+        
+        delete timeoutRefs.current[batchKey];
       };
 
-      // Execute with or without debounce
       if (debounce > 0) {
-        // Use unique key for batch operation to avoid conflicts
-        const batchKey = `__batch_${Math.random()}` as T;
-        timeoutRefs.current[batchKey] = setTimeout(() => {
-          executeUpdate();
-          delete timeoutRefs.current[batchKey];
-        }, debounce);
+        timeoutRefs.current[batchKey] = setTimeout(executeUpdate, debounce);
       } else {
         executeUpdate();
       }
@@ -210,8 +226,7 @@ export const useSmartFilter = <T extends string = string>(
   // ============================================
   const toggleFilter = useCallback(
     (key: T, value: string, options?: SmartFilterOptions) => {
-      const params = new URLSearchParams(searchParams.toString());
-      const currentVal = params.get(key);
+      const currentVal = optimisticParams.get(key);
       let newValues = currentVal ? currentVal.split(",") : [];
 
       if (newValues.includes(value)) {
@@ -223,7 +238,7 @@ export const useSmartFilter = <T extends string = string>(
       const finalValue = newValues.length > 0 ? newValues.join(",") : null;
       updateFilter(key, finalValue, options);
     },
-    [searchParams, updateFilter]
+    [optimisticParams, updateFilter]
   );
 
   // ============================================
@@ -232,20 +247,25 @@ export const useSmartFilter = <T extends string = string>(
   const clearAll = useCallback(
     (options: ClearAllOptions = {}) => {
       const { exclude = [], scroll = false, method = "push" } = options;
-      const params = new URLSearchParams(searchParams.toString());
+      
+      // 1. Update UI immediately
+      setOptimisticParams(prev => {
+        const next = new URLSearchParams(prev.toString());
+        Array.from(next.keys()).forEach(key => {
+          if (!exclude.includes(key)) next.delete(key);
+        });
+        return next;
+      });
 
-      // Clear all timeouts
+      // 2. Update URL
+      const params = new URLSearchParams(searchParams.toString());
       Object.values(timeoutRefs.current).forEach(clearTimeout);
       timeoutRefs.current = {};
 
-      // Delete all params except excluded ones
       Array.from(params.keys()).forEach((key) => {
-        if (!exclude.includes(key)) {
-          params.delete(key);
-        }
+        if (!exclude.includes(key)) params.delete(key);
       });
 
-      // Navigate
       const url = `${pathname}?${params.toString()}`;
       if (method === "replace") {
         router.replace(url, { scroll });
@@ -257,90 +277,36 @@ export const useSmartFilter = <T extends string = string>(
   );
 
   // ============================================
-  // Get Filter Value
+  // Read Methods (Always from Optimistic State)
   // ============================================
-  const getFilter = useCallback(
-    (key: T, defaultValue = "") => {
-      return searchParams.get(key) ?? defaultValue;
-    },
-    [searchParams]
-  );
+  const getFilter = useCallback((key: T, defaultValue = "") => {
+    return optimisticParams.get(key) ?? defaultValue;
+  }, [optimisticParams]);
 
-  // ============================================
-  // Get Array Filter (Comma-Separated)
-  // ============================================
-  const getArrayFilter = useCallback(
-    (key: T) => {
-      const val = searchParams.get(key);
-      return val ? val.split(",").filter(Boolean) : [];
-    },
-    [searchParams]
-  );
+  const getArrayFilter = useCallback((key: T) => {
+    const val = optimisticParams.get(key);
+    return val ? val.split(",").filter(Boolean) : [];
+  }, [optimisticParams]);
 
-  // ============================================
-  // Check if Value is Selected (Multi-Select)
-  // ============================================
-  const isSelected = useCallback(
-    (key: T, value: string) => {
-      const val = searchParams.get(key);
-      return val ? val.split(",").includes(value) : false;
-    },
-    [searchParams]
-  );
+  const isSelected = useCallback((key: T, value: string) => {
+    const val = optimisticParams.get(key);
+    return val ? val.split(",").includes(value) : false;
+  }, [optimisticParams]);
 
-  // ============================================
-  // Check if Any Filter is Active
-  // ============================================
-  /**
-   * Check if any filters are active
-   * @param keys - Specific keys to check. If not provided, checks all keys except pagination
-   */
-  const isFilterActive = useCallback(
-    (keys?: ReadonlyArray<T>) => {
-      if (keys && keys.length > 0) {
-        return keys.some((key) => searchParams.has(key));
-      }
+  const isFilterActive = useCallback((keys?: ReadonlyArray<T>) => {
+    if (keys && keys.length > 0) return keys.some((key) => optimisticParams.has(key));
+    const allKeys = Array.from(optimisticParams.keys());
+    return allKeys.some((key) => key !== paginationKey);
+  }, [optimisticParams, paginationKey]);
 
-      // Check all params except pagination
-      const allKeys = Array.from(searchParams.keys());
-      return allKeys.some((key) => key !== paginationKey);
-    },
-    [searchParams, paginationKey]
-  );
+  const getAllFilters = useCallback(() => 
+    Object.fromEntries(optimisticParams.entries()), 
+  [optimisticParams]);
 
-  // ============================================
-  // Get Active Filter Count
-  // ============================================
-  /**
-   * Count active filters
-   * @param keys - Specific keys to count. If not provided, counts all keys except pagination
-   */
-  const getActiveCount = useCallback(
-    (keys?: ReadonlyArray<T>) => {
-      if (keys && keys.length > 0) {
-        return keys.filter((key) => searchParams.has(key)).length;
-      }
-
-      // Count all params except pagination
-      const allKeys = Array.from(searchParams.keys());
-      return allKeys.filter((key) => key !== paginationKey).length;
-    },
-    [searchParams, paginationKey]
-  );
-
-  // ============================================
-  // Get All Filters as Object
-  // ============================================
-  /**
-   * Get all search params as an object
-   */
-  const getAllFilters = useCallback(() => {
-    const filters: Record<string, string> = {};
-    searchParams.forEach((value, key) => {
-      filters[key] = value;
-    });
-    return filters;
-  }, [searchParams]);
+  const getActiveCount = useCallback((keys?: ReadonlyArray<T>) => {
+    const activeKeys = keys || Array.from(optimisticParams.keys()).filter(k => k !== paginationKey);
+    return activeKeys.filter(k => optimisticParams.has(k)).length;
+  }, [optimisticParams, paginationKey]);
 
   return {
     // Update methods
