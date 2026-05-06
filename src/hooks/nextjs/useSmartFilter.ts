@@ -1,17 +1,7 @@
 "use client";
 
-import {
-  usePathname,
-  useRouter,
-  useSearchParams,
-} from "next/navigation";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ============================================
 // Type Definitions
@@ -75,7 +65,7 @@ const BATCH_KEY = "___global_batch_update___";
  * - Pending update state
  */
 export const useSmartFilter = <T extends string = string>(
-  config: SmartFilterConfig = {}
+  config: SmartFilterConfig = {},
 ) => {
   const {
     paginationKey = "page",
@@ -90,12 +80,10 @@ export const useSmartFilter = <T extends string = string>(
   const timeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const [optimisticParams, setOptimisticParams] = useState(
-    () => new URLSearchParams(searchParams.toString())
+    () => new URLSearchParams(searchParams.toString()),
   );
 
-  const latestParamsRef = useRef(
-    new URLSearchParams(searchParams.toString())
-  );
+  const latestParamsRef = useRef(new URLSearchParams(searchParams.toString()));
 
   const [pendingKeys, setPendingKeys] = useState<string[]>([]);
 
@@ -115,7 +103,7 @@ export const useSmartFilter = <T extends string = string>(
 
       return !Number.isInteger(page) || page < 1;
     },
-    [paginationKey, isEmptyValue]
+    [paginationKey, isEmptyValue],
   );
 
   const buildUrl = useCallback(
@@ -124,15 +112,11 @@ export const useSmartFilter = <T extends string = string>(
 
       return query ? `${pathname}?${query}` : pathname;
     },
-    [pathname]
+    [pathname],
   );
 
   const navigateWithParams = useCallback(
-    (
-      params: URLSearchParams,
-      method: NavigationMethod,
-      scroll: boolean
-    ) => {
+    (params: URLSearchParams, method: NavigationMethod, scroll: boolean) => {
       const url = buildUrl(params);
 
       if (method === "push") {
@@ -141,12 +125,13 @@ export const useSmartFilter = <T extends string = string>(
         router.replace(url, { scroll });
       }
     },
-    [router, buildUrl]
+    [router, buildUrl],
   );
 
   const addPendingKey = useCallback((key: string) => {
     setPendingKeys((prev) => {
       if (prev.includes(key)) return prev;
+
       return [...prev, key];
     });
   }, []);
@@ -164,13 +149,16 @@ export const useSmartFilter = <T extends string = string>(
 
       removePendingKey(key);
     },
-    [removePendingKey]
+    [removePendingKey],
   );
 
+  /**
+   * Only clears timers.
+   * Do not call setState here, so it stays safe to use inside effects.
+   */
   const clearAllTimers = useCallback(() => {
     Object.values(timeoutRefs.current).forEach(clearTimeout);
     timeoutRefs.current = {};
-    setPendingKeys([]);
   }, []);
 
   const updateOptimisticParams = useCallback(
@@ -180,14 +168,14 @@ export const useSmartFilter = <T extends string = string>(
       latestParamsRef.current = new URLSearchParams(next);
       setOptimisticParams(next);
     },
-    []
+    [],
   );
 
   const applyUpdatesToParams = useCallback(
     (
       baseParams: URLSearchParams,
       updates: Partial<Record<T, FilterValue>>,
-      resetPage: boolean
+      resetPage: boolean,
     ) => {
       const next = new URLSearchParams(baseParams);
       const entries = Object.entries(updates) as [T, FilterValue][];
@@ -214,7 +202,7 @@ export const useSmartFilter = <T extends string = string>(
 
       return next;
     },
-    [paginationKey, isEmptyValue, isInvalidPagination]
+    [paginationKey, isEmptyValue, isInvalidPagination],
   );
 
   const scheduleNavigation = useCallback(
@@ -222,7 +210,7 @@ export const useSmartFilter = <T extends string = string>(
       key: string,
       debounce: number,
       method: NavigationMethod,
-      scroll: boolean
+      scroll: boolean,
     ) => {
       clearTimer(key);
 
@@ -242,12 +230,7 @@ export const useSmartFilter = <T extends string = string>(
         executeUpdate();
       }
     },
-    [
-      clearTimer,
-      navigateWithParams,
-      addPendingKey,
-      removePendingKey,
-    ]
+    [clearTimer, navigateWithParams, addPendingKey, removePendingKey],
   );
 
   // ============================================
@@ -259,14 +242,18 @@ export const useSmartFilter = <T extends string = string>(
     const latestParams = latestParamsRef.current.toString();
 
     // Back/forward button or external URL change
-    if (latestParams !== currentParams) {
-      clearAllTimers();
+    if (latestParams === currentParams) return;
 
-      const next = new URLSearchParams(currentParams);
+    clearAllTimers();
 
-      latestParamsRef.current = next;
-      setOptimisticParams(next);
-    }
+    const next = new URLSearchParams(currentParams);
+
+    latestParamsRef.current = next;
+
+    // URL search params are external state, so this sync is intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOptimisticParams(next);
+    setPendingKeys([]);
   }, [searchParams, clearAllTimers]);
 
   // Cleanup pending timers on unmount
@@ -281,11 +268,7 @@ export const useSmartFilter = <T extends string = string>(
   // ============================================
 
   const updateFilter = useCallback(
-    (
-      key: T,
-      value: FilterValue,
-      options: SmartFilterOptions | number = {}
-    ) => {
+    (key: T, value: FilterValue, options: SmartFilterOptions | number = {}) => {
       if (isInvalidPagination(key, value)) return;
 
       const opt = typeof options === "number" ? { debounce: options } : options;
@@ -298,7 +281,11 @@ export const useSmartFilter = <T extends string = string>(
       } = opt;
 
       updateOptimisticParams((prev) =>
-        applyUpdatesToParams(prev, { [key]: value } as Partial<Record<T, FilterValue>>, resetPage)
+        applyUpdatesToParams(
+          prev,
+          { [key]: value } as Partial<Record<T, FilterValue>>,
+          resetPage,
+        ),
       );
 
       scheduleNavigation(key, debounce, method, scroll);
@@ -310,7 +297,7 @@ export const useSmartFilter = <T extends string = string>(
       updateOptimisticParams,
       applyUpdatesToParams,
       scheduleNavigation,
-    ]
+    ],
   );
 
   // ============================================
@@ -320,7 +307,7 @@ export const useSmartFilter = <T extends string = string>(
   const updateBatch = useCallback(
     (
       updates: Partial<Record<T, FilterValue>>,
-      options: SmartFilterOptions | number = {}
+      options: SmartFilterOptions | number = {},
     ) => {
       if (Object.keys(updates).length === 0) return;
 
@@ -334,7 +321,7 @@ export const useSmartFilter = <T extends string = string>(
       } = opt;
 
       updateOptimisticParams((prev) =>
-        applyUpdatesToParams(prev, updates, resetPage)
+        applyUpdatesToParams(prev, updates, resetPage),
       );
 
       scheduleNavigation(BATCH_KEY, debounce, method, scroll);
@@ -345,7 +332,7 @@ export const useSmartFilter = <T extends string = string>(
       updateOptimisticParams,
       applyUpdatesToParams,
       scheduleNavigation,
-    ]
+    ],
   );
 
   // ============================================
@@ -367,7 +354,7 @@ export const useSmartFilter = <T extends string = string>(
 
       updateFilter(key, finalValue, options);
     },
-    [updateFilter]
+    [updateFilter],
   );
 
   // ============================================
@@ -376,13 +363,10 @@ export const useSmartFilter = <T extends string = string>(
 
   const clearAll = useCallback(
     (options: ClearAllOptions = {}) => {
-      const {
-        exclude = [],
-        scroll = false,
-        method = defaultMethod,
-      } = options;
+      const { exclude = [], scroll = false, method = defaultMethod } = options;
 
       clearAllTimers();
+      setPendingKeys([]);
 
       updateOptimisticParams((prev) => {
         const next = new URLSearchParams(prev);
@@ -399,15 +383,10 @@ export const useSmartFilter = <T extends string = string>(
       navigateWithParams(
         new URLSearchParams(latestParamsRef.current),
         method,
-        scroll
+        scroll,
       );
     },
-    [
-      defaultMethod,
-      clearAllTimers,
-      updateOptimisticParams,
-      navigateWithParams,
-    ]
+    [defaultMethod, clearAllTimers, updateOptimisticParams, navigateWithParams],
   );
 
   // ============================================
@@ -418,7 +397,7 @@ export const useSmartFilter = <T extends string = string>(
     (key: T, defaultValue = "") => {
       return optimisticParams.get(key) ?? defaultValue;
     },
-    [optimisticParams]
+    [optimisticParams],
   );
 
   const getArrayFilter = useCallback(
@@ -427,18 +406,16 @@ export const useSmartFilter = <T extends string = string>(
 
       return value ? value.split(",").filter(Boolean) : [];
     },
-    [optimisticParams]
+    [optimisticParams],
   );
 
   const isSelected = useCallback(
     (key: T, value: string) => {
       const currentValue = optimisticParams.get(key);
 
-      return currentValue
-        ? currentValue.split(",").includes(value)
-        : false;
+      return currentValue ? currentValue.split(",").includes(value) : false;
     },
-    [optimisticParams]
+    [optimisticParams],
   );
 
   const isFilterActive = useCallback(
@@ -448,10 +425,10 @@ export const useSmartFilter = <T extends string = string>(
       }
 
       return Array.from(optimisticParams.keys()).some(
-        (key) => key !== paginationKey
+        (key) => key !== paginationKey,
       );
     },
-    [optimisticParams, paginationKey]
+    [optimisticParams, paginationKey],
   );
 
   const getAllFilters = useCallback(() => {
@@ -465,27 +442,27 @@ export const useSmartFilter = <T extends string = string>(
       const activeKeys =
         keys ??
         (Array.from(optimisticParams.keys()).filter(
-          (key) => key !== paginationKey
+          (key) => key !== paginationKey,
         ) as T[]);
 
       return activeKeys.filter((key) => optimisticParams.has(key)).length;
     },
-    [optimisticParams, paginationKey]
+    [optimisticParams, paginationKey],
   );
 
   const params = useMemo(
     () => new URLSearchParams(optimisticParams),
-    [optimisticParams]
+    [optimisticParams],
   );
 
   const visiblePendingKeys = useMemo(
     () => pendingKeys.filter((key) => key !== BATCH_KEY) as T[],
-    [pendingKeys]
+    [pendingKeys],
   );
 
   const isPendingKey = useCallback(
     (key: T) => pendingKeys.includes(key),
-    [pendingKeys]
+    [pendingKeys],
   );
 
   return {
