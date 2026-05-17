@@ -1,6 +1,7 @@
-
-import { cookies } from "next/headers";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { jwtDecode } from "jwt-decode";
 import { revalidateTag, updateTag } from "next/cache";
+import { cookies } from "next/headers";
 
 type ServerFetchOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
@@ -8,13 +9,14 @@ type ServerFetchOptions = Omit<RequestInit, "body"> & {
   persistCookies?: boolean;
   revalidate?: number | false;
   tags?: string[];
-  /** 
-   * "updateTag": Immediate expiration (Best for Server Actions)
-   * "revalidateTag": Stale-while-revalidate (Best for background updates)
+  /**
+   * "updateTag": immediate expiration, best for Server Actions.
+   * "revalidateTag": stale-while-revalidate, best for background updates.
    */
   invalidateMode?: "updateTag" | "revalidateTag";
-  updateTag?: string | string[]; 
+  updateTag?: string | string[];
   next?: NextFetchRequestConfig;
+  responseType?: "json" | "text";
 };
 
 export type ApiError = Error & {
@@ -22,22 +24,72 @@ export type ApiError = Error & {
   data: unknown;
 };
 
-export const serverFetch = async <T = unknown>(
+const isTokenExpired = (token: string): boolean => {
+  try {
+    const decoded: { exp: number } = jwtDecode(token);
+    return decoded.exp * 1000 < Date.now();
+  } catch {
+    return true;
+  }
+};
+
+const getValidAccessToken = async (baseUrl: string): Promise<string | null> => {
+  const cookieStore = await cookies();
+  let accessToken = cookieStore.get("accessToken")?.value;
+
+  if (accessToken && !isTokenExpired(accessToken)) {
+    return accessToken;
+  }
+
+  const refreshToken = cookieStore.get("refreshToken")?.value;
+  if (!refreshToken) {
+    return null;
+  }
+
+  const res = await fetch(`${baseUrl}/user/access-token`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${refreshToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const result = await res.json().catch(() => null);
+  accessToken = result?.data?.accessToken;
+
+  if (!accessToken) {
+    return null;
+  }
+
+  try {
+    cookieStore.set("accessToken", accessToken);
+  } catch {
+    // Some server contexts do not allow writing cookies.
+  }
+
+  return accessToken;
+};
+
+export const serverFetch = async <T = any>(
   endpoint: string,
   options: ServerFetchOptions = {}
-): Promise<T | null> => {
-  const { 
-    isPublic = false, 
-    body: rawBody, 
-    headers, 
-    method = "GET", 
-    revalidate, 
+): Promise<T> => {
+  const {
+    isPublic = false,
+    body: rawBody,
+    headers,
+    method = "GET",
+    revalidate = method.toUpperCase() === "GET" ? 3600 : 0,
     updateTag: tagsToInvalidate,
-    invalidateMode = "updateTag", 
-    tags, 
+    invalidateMode = "updateTag",
+    tags,
     next,
     persistCookies = false,
-    ...rest 
+    responseType = "json",
+    ...rest
   } = options;
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_API;
@@ -45,80 +97,79 @@ export const serverFetch = async <T = unknown>(
 
   const defaultHeaders: Record<string, string> = {};
 
-  // Auth Handling (Next.js 15+ awaits cookies)
   if (!isPublic) {
-    const cookieStore = await cookies();
-    const accessToken = cookieStore.get("accessToken")?.value;
+    const accessToken = await getValidAccessToken(baseUrl);
+
     if (accessToken) {
-      defaultHeaders["Authorization"] = `Bearer ${accessToken}`;
+      defaultHeaders.Authorization = `Bearer ${accessToken}`;
+    } else {
+      return {
+        success: false,
+        message: "Authorization token is required",
+        status: 401,
+      } as T;
     }
   }
 
-  // Handle body
   let body = rawBody;
   if (body && typeof body === "object" && !(body instanceof FormData)) {
     body = JSON.stringify(body);
     defaultHeaders["Content-Type"] = "application/json";
   }
 
-  const url = `${baseUrl}${endpoint}`;
-
   try {
-    const res = await fetch(url, {
+    const res = await fetch(`${baseUrl}${endpoint}`, {
       ...rest,
       method,
       ...(body ? { body: body as BodyInit } : {}),
       headers: { ...defaultHeaders, ...headers },
       next: {
         revalidate,
-        tags, 
+        tags,
         ...next,
       },
     });
 
-    // New Multi-Argument Invalidation Logic
     if (res.ok && tagsToInvalidate) {
-      const tagList = Array.isArray(tagsToInvalidate) ? tagsToInvalidate : [tagsToInvalidate];
-      
-      tagList.forEach(tag => {
+      const tagList = Array.isArray(tagsToInvalidate)
+        ? tagsToInvalidate
+        : [tagsToInvalidate];
+
+      tagList.forEach((tag) => {
         try {
           if (invalidateMode === "updateTag") {
-            // Newest standard for immediate UI updates
             updateTag(tag);
           } else {
-            // Required 2 arguments: tag and profile ("max" is recommended)
-            revalidateTag(tag, "max"); 
+            revalidateTag(tag, "max");
           }
         } catch {
-          // Fallback if updateTag is called outside Server Action context
           revalidateTag(tag, "max");
         }
       });
     }
 
-    // Cookie Handling (conditional persist)
     const setCookieHeader = res.headers.get("set-cookie");
     if (persistCookies && setCookieHeader) {
       const cookieStore = await cookies();
       const cookiesArray = setCookieHeader.split(/,(?=[^;]+=[^;]+)/);
 
       cookiesArray.forEach((cookieString) => {
-        if (!cookieString.includes("=")) return; // DSA Guard: Avoid useless processing
+        if (!cookieString.includes("=")) return;
 
         const parts = cookieString.split(";")[0].split("=");
-        const trimmedName = parts[0].trim();
+        const name = parts[0].trim();
         const value = parts.slice(1).join("=");
 
-        if (trimmedName === "accessToken" || trimmedName === "refreshToken") {
+        if (name === "accessToken" || name === "refreshToken") {
           try {
-            cookieStore.set(trimmedName, value, {
+            cookieStore.set(name, value, {
               httpOnly: true,
               secure: process.env.NODE_ENV === "production",
               sameSite: "lax",
               path: "/",
             });
           } catch {
-            // Silently fail if context doesn't allow cookie setting
+            // Some server contexts do not allow writing cookies.
           }
         }
       });
@@ -132,11 +183,18 @@ export const serverFetch = async <T = unknown>(
       throw error;
     }
 
-    if (res.status === 204 || res.headers.get("content-length") === "0") return null;
+    if (res.status === 204 || res.headers.get("content-length") === "0") {
+      return null as T;
+    }
 
-    return res.json();
-  } catch (error) {
-    console.error("[serverFetch] Error:", error);
+    return responseType === "text"
+      ? ((await res.text()) as T)
+      : ((await res.json()) as T);
+  } catch (error: unknown) {
+    const apiError = error as ApiError;
+    if (apiError?.status !== 401) {
+      console.error("[serverFetch] Error:", apiError);
+    }
     throw error;
   }
 };
