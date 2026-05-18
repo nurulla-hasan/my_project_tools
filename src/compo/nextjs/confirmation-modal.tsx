@@ -11,42 +11,52 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
-import { Spinner } from "../spinner";
 import type { ReactNode } from "react";
+import { Trash2 } from "lucide-react";
+import { Button } from "../button";
+import { Spinner } from "../spinner";
 
 interface ConfirmationModalProps {
   title?: string;
   description?: string;
+  confirmText?: string;
+  loadingText?: string;
+  cancelText?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   onConfirm: () => void;
   isLoading?: boolean;
   trigger?: ReactNode;
-  confirmButtonText?: string;
-  confirmLoadingText?: string;
+  actionTrigger?: ReactNode;
+  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  children?: ReactNode;
 }
 
 export function ConfirmationModal({
   title = "Are you sure?",
   description = "This action cannot be undone.",
+  confirmText = "Delete",
+  loadingText = "Deleting...",
+  cancelText = "Cancel",
   open,
   onOpenChange,
   onConfirm,
   isLoading,
   trigger,
-  confirmButtonText = "Confirm",
-  confirmLoadingText = "Confirming...",
+  actionTrigger,
+  variant = "default",
+  children,
 }: ConfirmationModalProps) {
+  const finalTrigger = actionTrigger || trigger;
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      {trigger !== null && (
+     {finalTrigger !== null && (
         <AlertDialogTrigger asChild>
-          {trigger || (
+          {finalTrigger || (
             <Button
-              variant="ghost"
-              size="icon"
+              variant="outline"
+              size="icon-sm"
             >
               <Trash2 />
             </Button>
@@ -60,22 +70,25 @@ export function ConfirmationModal({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
 
+        {children}
+
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={isLoading}>{cancelText}</AlertDialogCancel>
           <AlertDialogAction
-            onClick={(e) => {
+            onClick={(e: { preventDefault: () => void; }) => {
               e.preventDefault();
               onConfirm();
             }}
+            variant={variant}
             disabled={isLoading}
           >
             {isLoading ? (
               <>
                 <Spinner />
-                {confirmLoadingText}
+                {loadingText}
               </>
             ) : (
-              confirmButtonText
+              confirmText
             )}
           </AlertDialogAction>
         </AlertDialogFooter>

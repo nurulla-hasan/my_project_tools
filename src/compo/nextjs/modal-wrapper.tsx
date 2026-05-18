@@ -39,7 +39,7 @@ export function ModalWrapper({
         </DialogTrigger>
       )}
 
-      <DialogContent className="p-0 gap-0">
+      <DialogContent className="p-0 gap-0 shadow-md shadow-primary overflow-hidden">
         
         {/* Header Section */}
         {title && (
@@ -57,7 +57,7 @@ export function ModalWrapper({
         </div>
 
         {showClose && (
-          <div className="p-4 border-t bg-muted/20 flex justify-end shrink-0">
+          <div className="p-4 border-t bg-muted flex justify-end shrink-0">
             <DialogClose asChild>
               <Button type="button" variant="outline">
                 Close

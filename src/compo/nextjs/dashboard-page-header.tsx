@@ -6,7 +6,7 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "../button";
 
-const DashboardHeader = ({
+const DashboardPageHeader = ({
   title,
   description,
   length,
@@ -32,17 +32,17 @@ const DashboardHeader = ({
           </Button>
         )}
         <div className="flex flex-col">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl md:text-2xl font-semibold text-primary">
+          <div className="flex items-center gap-1">
+            <h1 className="text-lg md:text-xl uppercase tracking-wider font-medium text-primary">
               {title}
             </h1>
             {length && (
-              <span className="inline-flex items-center justify-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary border border-primary/20">
+              <span className="text-sm inline-flex items-center justify-center rounded-full bg-primary/10 px-2.5 py-0.5 font-medium text-primary border border-primary/20">
                 {length}
               </span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground max-w-150 leading-relaxed">
+          <p className="text-sm md:text-base text-muted-foreground max-w-150 leading-relaxed">
             {description}
           </p>
         </div>
@@ -51,4 +51,4 @@ const DashboardHeader = ({
   );
 };
 
-export default DashboardHeader
+export default DashboardPageHeader

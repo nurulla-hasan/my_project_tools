@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSmartFilter } from "@/hooks/useSmartFilter";
 import {
   Pagination,
   PaginationContent,
@@ -70,28 +70,28 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({
   totalPages,
   className,
 }) => {
-  const pathname = usePathname();
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const { updateFilter, paramsString } = useSmartFilter({
+    defaultMethod: "push",
+  });
 
   if (totalPages <= 1) return null;
 
   const paginationRange = getPaginationRange(totalPages, currentPage);
 
   const createPageUrl = (pageNumber: number | string) => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(paramsString);
     params.set("page", pageNumber.toString());
-    return `${pathname}?${params.toString()}`;
+    return `?${params.toString()}`;
   };
 
-  const handleNavigate = (pageNumber: number) => (
-    e: React.MouseEvent<HTMLAnchorElement>
-  ) => {
-    e.preventDefault(); 
-    const url = createPageUrl(pageNumber);
-    
-    router.push(url, { scroll: false }); 
-  };
+  const handleNavigate =
+    (pageNumber: number) => (e: React.MouseEvent<HTMLAnchorElement>) => {
+      e.preventDefault();
+      updateFilter("page", pageNumber, {
+        resetPage: false,
+        scroll: false,
+      });
+    };
 
   return (
     <Pagination className={className}>
@@ -103,6 +103,7 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({
             onClick={currentPage > 1 ? handleNavigate(currentPage - 1) : undefined}
             aria-disabled={currentPage <= 1}
             tabIndex={currentPage <= 1 ? -1 : undefined}
+            size="sm"
             className={
               currentPage <= 1
                 ? "pointer-events-none opacity-50"
@@ -127,6 +128,7 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({
                 href={createPageUrl(pageNumber)}
                 isActive={currentPage === pageNumber}
                 onClick={handleNavigate(pageNumber as number)}
+                size="sm"
               >
                 {pageNumber}
               </PaginationLink>
@@ -141,6 +143,7 @@ const CustomPagination: React.FC<CustomPaginationProps> = ({
             onClick={currentPage < totalPages ? handleNavigate(currentPage + 1) : undefined}
             aria-disabled={currentPage >= totalPages}
             tabIndex={currentPage >= totalPages ? -1 : undefined}
+            size="sm"
             className={
               currentPage >= totalPages
                 ? "pointer-events-none opacity-50"
