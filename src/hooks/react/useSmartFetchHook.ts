@@ -44,6 +44,8 @@ type BaseParams = {
  */
 type SmartFetchOptions<P> = Partial<P> & {
   skip?: boolean;
+  debounceMs?: number;
+  syncInitialParams?: boolean;
 };
 
 /**
@@ -82,6 +84,42 @@ type QueryHook<P extends BaseParams, T> = (
   refetch?: () => void;
 };
 
+const stableSerialize = (value: unknown, seen = new WeakSet<object>()): string => {
+  if (value === null || typeof value !== 'object') {
+    if (typeof value === 'function') return '[Function]';
+    if (typeof value === 'symbol') return value.toString();
+    if (typeof value === 'undefined') return '[Undefined]';
+
+    return JSON.stringify(value);
+  }
+
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const serializedArray = `[${value.map(item => stableSerialize(item, seen)).join(',')}]`;
+    seen.delete(value);
+
+    return serializedArray;
+  }
+
+  if (value instanceof Date) {
+    const serializedDate = `Date(${value.toISOString()})`;
+    seen.delete(value);
+
+    return serializedDate;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+    .map(([key, item]) => `${key}:${stableSerialize(item, seen)}`);
+
+  const serializedObject = `{${entries.join(',')}}`;
+  seen.delete(value);
+
+  return serializedObject;
+};
+
 /**
  * useSmartFetchHook - The Ultimate "Senior Architect" Version
  * Optimized for React 18/19 & Next.js Ecosystem.
@@ -95,15 +133,15 @@ const useSmartFetchHook = <P extends BaseParams, T>(
 
   const skip = options.skip ?? false;
   const optionLimit = options.limit;
+  const debounceMs = options.debounceMs ?? 500;
+  const syncInitialParams = options.syncInitialParams ?? true;
 
   // --- THE "PONDITI" LOGIC (Deep Compare initialParams) ---
   // This ensures that even if a new object { status: 'active' } is passed on every render,
   // the hook won't re-trigger unless the values inside actually change.
-  const initialParamsRef = useRef(initialParams);
-  const initialParamsString = JSON.stringify(initialParams);
+  const initialParamsString = stableSerialize(initialParams);
   
   const stableInitialParams = useMemo(() => {
-    initialParamsRef.current = initialParams;
     return initialParams;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialParamsString]);
@@ -111,7 +149,7 @@ const useSmartFetchHook = <P extends BaseParams, T>(
   // Memoize default values to maintain reference stability
   const defaultValues = useMemo(() => ({
     page: 1,
-    limit: optionLimit ?? 10,
+    ...(optionLimit !== undefined ? { limit: optionLimit } : {}),
     ...stableInitialParams
   }), [stableInitialParams, optionLimit]);
   // --------------------------------------------------------
@@ -121,12 +159,28 @@ const useSmartFetchHook = <P extends BaseParams, T>(
   const [isPending, startTransition] = useTransition();
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const clearDebounceTimer = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+  }, []);
+
   // Cleanup timer on unmount to prevent memory leaks
   useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, []);
+    return clearDebounceTimer;
+  }, [clearDebounceTimer]);
+
+  // Keep the hook aligned when route/parent-provided initial params genuinely change.
+  useEffect(() => {
+    if (!syncInitialParams) return;
+
+    clearDebounceTimer();
+    startTransition(() => {
+      setFilterState(defaultValues);
+      setQueryParams(defaultValues);
+    });
+  }, [clearDebounceTimer, defaultValues, startTransition, syncInitialParams]);
 
   // Execute query hook with skip support
   const {
@@ -166,14 +220,17 @@ const useSmartFetchHook = <P extends BaseParams, T>(
       const newState = resolveNewState(prev);
       
       if (isDebounceRequired) {
-        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        clearDebounceTimer();
         
         debounceTimerRef.current = setTimeout(() => {
           startTransition(() => {
             setQueryParams(newState);
           });
-        }, 500);
+          debounceTimerRef.current = null;
+        }, debounceMs);
       } else {
+        clearDebounceTimer();
+
         // Instant update for non-debounced fields (like Pagination or Radios)
         startTransition(() => {
           setQueryParams(newState);
@@ -182,7 +239,7 @@ const useSmartFetchHook = <P extends BaseParams, T>(
       
       return newState;
     });
-  }, [setQueryParams, startTransition, setFilterState]);
+  }, [clearDebounceTimer, debounceMs, startTransition]);
 
   /**
    * Specifically for page navigation (Always instant)
@@ -195,23 +252,24 @@ const useSmartFetchHook = <P extends BaseParams, T>(
    * Resets entire UI state and API query to initial values
    */
   const resetFilters = useCallback(() => {
+    clearDebounceTimer();
+
     startTransition(() => {
       setFilterState(defaultValues);
       setQueryParams(defaultValues);
     });
-  }, [defaultValues, startTransition, setFilterState, setQueryParams]);
+  }, [clearDebounceTimer, defaultValues, startTransition]);
 
   /**
    * Manual refetch trigger
    */
   const refetch = useCallback(() => {
+    clearDebounceTimer();
+
     if (originalRefetch) {
       originalRefetch();
-    } else {
-      // Trigger a state change to force the query to run again if refetch is unavailable
-      setQueryParams(prev => ({ ...prev }));
     }
-  }, [originalRefetch, setQueryParams]);
+  }, [clearDebounceTimer, originalRefetch]);
 
   const list = useMemo(() => data?.data ?? [], [data?.data]);
   const meta = data?.meta;

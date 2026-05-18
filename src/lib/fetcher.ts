@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import "server-only";
 import { jwtDecode } from "jwt-decode";
 import { revalidateTag, updateTag } from "next/cache";
 import { cookies } from "next/headers";
