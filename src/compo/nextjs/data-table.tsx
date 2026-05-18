@@ -7,13 +7,12 @@ import {
   getCoreRowModel,
   useReactTable,
   getPaginationRowModel,
-  getSortedRowModel,
-  SortingState,
   PaginationState,
   ColumnFiltersState,
   getFilteredRowModel,
 } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search } from "lucide-react";
+import { Search } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { useSmartFilter } from "@/hooks/useSmartFilter";
 import {
@@ -40,16 +39,12 @@ type PaginationMeta = {
 };
 
 /**
- * Extend TanStack Table's ColumnMeta to support custom sorting/filtering
+ * Extend TanStack Table's ColumnMeta only for custom header class.
  */
 declare module "@tanstack/react-table" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData, TValue> {
     headerClassName?: string;
-    /** URL parameter key for sorting (e.g., "price") */
-    sortKey?: string;
-    /** Custom values for sorting directions (e.g., { asc: "low", desc: "high" }) */
-    sortValues?: { asc: string; desc: string };
   }
 }
 
@@ -58,14 +53,19 @@ interface DataTableProps<TData, TValue> {
   data: TData[];
   limit?: number;
   meta?: PaginationMeta;
-  /** The key in the URL for searching (e.g., "q" or "customer") */
+
+  /**
+   * The key in the URL for searching.
+   * Example: "q", "search", "customer"
+   */
   searchKey?: string;
+
   searchPlaceholder?: string;
   showFooter?: boolean;
 }
 
 /**
- * Internal component that handles all the table logic and URL synchronization.
+ * Internal component that handles table logic and URL search synchronization.
  * This is wrapped in Suspense by the main DataTable component.
  */
 function DataTableInner<TData, TValue>({
@@ -77,35 +77,24 @@ function DataTableInner<TData, TValue>({
   searchPlaceholder,
   showFooter = false,
 }: DataTableProps<TData, TValue>) {
-  // Initialize our Smart Filter hook for URL synchronization
-  const { updateFilter, getFilter } = useSmartFilter();
-
-  /**
-   * Initialize table sorting state from the URL.
-   * Only columns with a 'sortKey' defined in their metadata will be synced.
-   */
-  const [sorting, setSorting] = React.useState<SortingState>(() => {
-    const initialState: SortingState = [];
-    columns.forEach((col) => {
-      const columnMeta = col.meta;
-      if (columnMeta?.sortKey) {
-        const val = getFilter(columnMeta.sortKey);
-        if (val) {
-          const isDesc = val === (columnMeta.sortValues?.desc ?? "high");
-          initialState.push({ id: (col as { accessorKey?: string }).accessorKey ?? "", desc: isDesc });
-        }
-      }
-    });
-    return initialState;
+  const { updateFilter, getFilter } = useSmartFilter<string>({
+    paginationKey: "page",
+    defaultDebounce: 500,
+    defaultMethod: "replace",
   });
 
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+  const [columnFilters, setColumnFilters] =
+    React.useState<ColumnFiltersState>([]);
+
   const [pagination, setPagination] = React.useState<PaginationState>({
     pageIndex: meta ? meta.page - 1 : 0,
     pageSize: limit,
   });
 
-  // Keep internal pagination state in sync with external meta props
+  /**
+   * Keep internal pagination state in sync with external meta props.
+   * Useful when pagination is controlled by server response.
+   */
   React.useEffect(() => {
     setPagination((prev) => ({
       ...prev,
@@ -122,65 +111,44 @@ function DataTableInner<TData, TValue>({
       ? (meta.totalPages ?? Math.ceil(meta.total / meta.limit))
       : undefined,
     state: {
-      sorting,
       columnFilters,
       pagination,
     },
     onPaginationChange: setPagination,
     onColumnFiltersChange: setColumnFilters,
-    getFilteredRowModel: getFilteredRowModel(),
+
+    /**
+     * If meta exists, pagination is handled by the server/API.
+     * Otherwise, TanStack handles pagination locally.
+     */
     manualPagination: !!meta,
-    onSortingChange: (updater) => {
-      const next = typeof updater === "function" ? updater(sorting) : updater;
-      setSorting(next);
 
-      if (next.length > 0) {
-        const column = table.getColumn(next[0].id);
-        const columnMeta = column?.columnDef.meta;
-
-        if (columnMeta?.sortKey) {
-          const key = columnMeta.sortKey;
-          const value = next[0].desc
-            ? columnMeta.sortValues?.desc ?? "high"
-            : columnMeta.sortValues?.asc ?? "low";
-
-          updateFilter(key, value);
-        }
-      } else {
-        if (sorting.length > 0) {
-          const column = table.getColumn(sorting[0].id);
-          const columnMeta = column?.columnDef.meta;
-          if (columnMeta?.sortKey) {
-            updateFilter(columnMeta.sortKey, null);
-          }
-        }
-      }
-    },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: meta ? undefined : getPaginationRowModel(),
   });
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        {searchKey && (
+      {searchKey && (
+        <div className="flex items-center justify-between gap-3">
           <div className="relative w-full max-w-64">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder={searchPlaceholder ?? `Filter ${searchKey}...`}
-              value={getFilter(searchKey || "")}
+              placeholder={searchPlaceholder ?? `Search ${searchKey}...`}
+              value={getFilter(searchKey)}
               onChange={(event) =>
-                updateFilter(searchKey || "", event.target.value, {
+                updateFilter(searchKey, event.target.value, {
                   debounce: 500,
+                  method: "replace",
                 })
               }
               className="pl-9"
             />
           </div>
-        )}
-      </div>
-      
+        </div>
+      )}
+
       <ScrollArea className="w-full rounded-lg border overflow-x-auto">
         <Table>
           <TableHeader>
@@ -194,42 +162,20 @@ function DataTableInner<TData, TValue>({
                       header.column.columnDef.meta?.headerClassName,
                     )}
                   >
-                    {header.isPlaceholder ? null : (
-                      <div
-                        className={
-                          header.column.getCanSort()
-                            ? "flex items-center gap-1 cursor-pointer select-none hover:text-foreground"
-                            : ""
-                        }
-                        onClick={header.column.getToggleSortingHandler()}
-                      >
-                        {flexRender(
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
                           header.column.columnDef.header,
                           header.getContext(),
                         )}
-                        {header.column.getCanSort() && (
-                          <span className="ml-1">
-                            {header.column.getIsSorted() === "asc" && (
-                              <ArrowUp className="h-3 w-3" />
-                            )}
-                            {header.column.getIsSorted() === "desc" && (
-                              <ArrowDown className="h-3 w-3" />
-                            )}
-                            {!header.column.getIsSorted() && (
-                              <ArrowUpDown className="h-3 w-3 opacity-50" />
-                            )}
-                          </span>
-                        )}
-                      </div>
-                    )}
                   </TableHead>
                 ))}
               </TableRow>
             ))}
           </TableHeader>
-          
+
           <TableBody>
-            {table.getRowModel().rows?.length ? (
+            {table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
@@ -256,7 +202,7 @@ function DataTableInner<TData, TValue>({
               </TableRow>
             )}
           </TableBody>
-          
+
           {showFooter && (
             <TableFooter className="border-t">
               {table.getFooterGroups().map((footerGroup) => (
@@ -276,6 +222,7 @@ function DataTableInner<TData, TValue>({
             </TableFooter>
           )}
         </Table>
+
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
 
