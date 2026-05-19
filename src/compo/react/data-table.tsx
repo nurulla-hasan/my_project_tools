@@ -1,4 +1,3 @@
-
 import * as React from "react";
 import {
   flexRender,
@@ -11,7 +10,7 @@ import {
   type Updater,
 } from "@tanstack/react-table";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Loader } from "lucide-react";
+import { AlertCircle, Loader } from "lucide-react";
 
 import {
   Table,
@@ -36,16 +35,28 @@ declare module "@tanstack/react-table" {
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
+
+  /**
+   * Client-side pagination size.
+   * If not provided and meta is not provided, table will show all rows.
+   */
   pageSize?: number;
+
   isLoading?: boolean;
   isError?: boolean;
   isFetching?: boolean;
+
+  /**
+   * Server-side pagination meta.
+   * If provided, table will use server-side pagination.
+   */
   meta?: {
     total: number;
     page: number;
     limit: number;
     totalPages?: number;
   };
+
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (limit: number) => void;
 }
@@ -53,7 +64,7 @@ interface DataTableProps<TData, TValue> {
 export function DataTable<TData, TValue>({
   columns,
   data,
-  pageSize = 10,
+  pageSize,
   isLoading,
   isError,
   isFetching,
@@ -63,24 +74,63 @@ export function DataTable<TData, TValue>({
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
 
-  // Handle pagination changes from TanStack Table
+  const [clientPagination, setClientPagination] =
+    React.useState<PaginationState>({
+      pageIndex: 0,
+      pageSize: pageSize ?? data.length,
+    });
+
+  const isServerPagination = Boolean(meta);
+  const isClientPagination = Boolean(!meta && pageSize);
+  const shouldUsePagination = isServerPagination || isClientPagination;
+
+  React.useEffect(() => {
+    if (!pageSize || meta) return;
+
+    setClientPagination(() => ({
+      pageIndex: 0,
+      pageSize,
+    }));
+  }, [pageSize, meta]);
+
+  const skeletonRowCount = meta?.limit ?? pageSize ?? 1;
+
   const onPaginationChange = (updater: Updater<PaginationState>) => {
-    if (!meta) return;
+    if (meta) {
+      const currentPagination: PaginationState = {
+        pageIndex: meta.page - 1,
+        pageSize: meta.limit,
+      };
 
-    const currentPagination = {
-      pageIndex: meta.page - 1,
-      pageSize: meta.limit,
-    };
+      const nextPagination =
+        typeof updater === "function" ? updater(currentPagination) : updater;
 
-    const nextPagination =
-      typeof updater === "function" ? updater(currentPagination) : updater;
+      if (nextPagination.pageIndex !== currentPagination.pageIndex) {
+        onPageChange?.(nextPagination.pageIndex + 1);
+      }
 
-    if (nextPagination.pageIndex !== currentPagination.pageIndex) {
-      onPageChange?.(nextPagination.pageIndex + 1);
+      if (nextPagination.pageSize !== currentPagination.pageSize) {
+        onPageSizeChange?.(nextPagination.pageSize);
+      }
+
+      return;
     }
 
-    if (nextPagination.pageSize !== currentPagination.pageSize) {
-      onPageSizeChange?.(nextPagination.pageSize);
+    if (pageSize) {
+      setClientPagination((currentPagination) => {
+        const nextPagination =
+          typeof updater === "function" ? updater(currentPagination) : updater;
+
+        if (nextPagination.pageIndex !== currentPagination.pageIndex) {
+          onPageChange?.(nextPagination.pageIndex + 1);
+        }
+
+        if (nextPagination.pageSize !== currentPagination.pageSize) {
+          onPageSizeChange?.(nextPagination.pageSize);
+        }
+
+        return nextPagination;
+      });
     }
   };
 
@@ -88,28 +138,50 @@ export function DataTable<TData, TValue>({
   const table = useReactTable({
     data,
     columns,
+
     pageCount: meta
       ? (meta.totalPages ?? Math.ceil(meta.total / meta.limit))
       : undefined,
+
     state: {
       sorting,
+
       ...(meta && {
         pagination: {
           pageIndex: meta.page - 1,
           pageSize: meta.limit,
         },
       }),
+
+      ...(!meta &&
+        pageSize && {
+        pagination: clientPagination,
+      }),
     },
-    manualPagination: !!meta,
+
+    manualPagination: isServerPagination,
+
     onSortingChange: setSorting,
-    onPaginationChange: onPaginationChange,
+    onPaginationChange: shouldUsePagination ? onPaginationChange : undefined,
+
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: {
-      pagination: { pageSize },
-    },
+
+    ...(shouldUsePagination && {
+      getPaginationRowModel: getPaginationRowModel(),
+    }),
   });
+
+  const paginationMeta =
+    meta ??
+    (pageSize
+      ? {
+        total: data.length,
+        page: table.getState().pagination.pageIndex + 1,
+        limit: table.getState().pagination.pageSize,
+        totalPages: table.getPageCount(),
+      }
+      : undefined);
 
   return (
     <div className="space-y-4">
@@ -119,55 +191,34 @@ export function DataTable<TData, TValue>({
             <Loader className="text-primary size-6 animate-spin" />
           </div>
         )}
-        <ScrollArea className="w-[calc(100vw-42px)] lg:w-[calc(100vw-300px)] rounded-xl border whitespace-nowrap">
+
+        <ScrollArea className="w-full rounded-xl border whitespace-nowrap">
           <Table>
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => {
-                    return (
-                      <TableHead
-                        key={header.id}
-                        className={header.column.columnDef.meta?.headerClassName}
-                      >
-                        {header.isPlaceholder ? null : (
-                          <div
-                            className={
-                              header.column.getCanSort()
-                                ? "flex items-center gap-1 cursor-pointer select-none hover:text-foreground"
-                                : ""
-                            }
-                            onClick={header.column.getToggleSortingHandler()}
-                          >
-                            {flexRender(
-                              header.column.columnDef.header,
-                              header.getContext()
-                            )}
-                            {header.column.getCanSort() && (
-                              <span className="ml-1">
-                                {header.column.getIsSorted() === "asc" && (
-                                  <ArrowUp className="h-3 w-3" />
-                                )}
-                                {header.column.getIsSorted() === "desc" && (
-                                  <ArrowDown className="h-3 w-3" />
-                                )}
-                                {!header.column.getIsSorted() && (
-                                  <ArrowUpDown className="h-3 w-3 opacity-50" />
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </TableHead>
-                    );
-                  })}
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      key={header.id}
+                      className={header.column.columnDef.meta?.headerClassName}
+                    >
+                      <div className="flex w-full items-center justify-between gap-1">
+                        <div className="flex-1">
+                          {flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                        </div>
+                      </div>
+                    </TableHead>
+                  ))}
                 </TableRow>
               ))}
             </TableHeader>
+
             <TableBody>
               {isLoading ? (
-                // Loading Skeleton Rows
-                Array.from({ length: pageSize }).map((_, index) => (
+                Array.from({ length: skeletonRowCount }).map((_, index) => (
                   <TableRow key={index} className="h-14">
                     {columns.map((_column, cellIndex) => (
                       <TableCell key={cellIndex}>
@@ -177,7 +228,6 @@ export function DataTable<TData, TValue>({
                   </TableRow>
                 ))
               ) : isError ? (
-                // Error State
                 <TableRow>
                   <TableCell
                     colSpan={columns.length}
@@ -189,35 +239,47 @@ export function DataTable<TData, TValue>({
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : table.getRowModel().rows?.length ? (
+              ) : table.getRowModel().rows.length ? (
                 table.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
                     data-state={row.getIsSelected() && "selected"}
-                    className={`h-14 ${isFetching ? "opacity-50 transition-opacity duration-200" : ""}`}
+                    className={`h-14 ${isFetching
+                        ? "opacity-50 transition-opacity duration-200"
+                        : ""
+                      }`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
                       </TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-22 text-center">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-22 text-center"
+                  >
                     No results.
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
+
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
       </div>
 
       <React.Suspense fallback={null}>
-        {meta && !isError && !isLoading && <DataTablePagination table={table} meta={meta} />}
+        {paginationMeta && !isError && !isLoading && (
+          <DataTablePagination table={table} meta={paginationMeta} />
+        )}
       </React.Suspense>
     </div>
   );
