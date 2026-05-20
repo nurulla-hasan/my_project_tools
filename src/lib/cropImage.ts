@@ -145,3 +145,37 @@ export async function cropAndCompressAvatar(
     URL.revokeObjectURL(imageSrc);
   }
 }
+
+export async function getCompressedCroppedAvatar(
+  imageSrc: string,
+  pixelCrop: PixelCrop,
+  options: AvatarImageOptions = {}
+): Promise<File | null> {
+  const {
+    fileName = "profile.jpg",
+    outputSize = DEFAULT_AVATAR_SIZE,
+    mimeType = "image/jpeg",
+    quality = DEFAULT_QUALITY,
+    maxBytes = DEFAULT_MAX_BYTES,
+  } = options;
+
+  let currentQuality = quality;
+  let croppedFile = await getCroppedImg(imageSrc, pixelCrop, {
+    outputSize,
+    mimeType,
+    quality: currentQuality,
+    fileName,
+  });
+
+  while (croppedFile && croppedFile.size > maxBytes && currentQuality > 0.52) {
+    currentQuality = Math.max(0.52, currentQuality - 0.08);
+    croppedFile = await getCroppedImg(imageSrc, pixelCrop, {
+      outputSize,
+      mimeType,
+      quality: currentQuality,
+      fileName,
+    });
+  }
+
+  return croppedFile;
+}
