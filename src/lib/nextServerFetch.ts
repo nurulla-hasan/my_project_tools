@@ -74,7 +74,7 @@ const getValidAccessToken = async (baseUrl: string): Promise<string | null> => {
   return accessToken;
 };
 
-export const serverFetch = async <T = any>(
+export const nextServerFetch = async <T = any>(
   endpoint: string,
   options: ServerFetchOptions = {}
 ): Promise<T> => {
@@ -194,7 +194,7 @@ export const serverFetch = async <T = any>(
   } catch (error: unknown) {
     const apiError = error as ApiError;
     if (apiError?.status !== 401) {
-      console.error("[serverFetch] Error:", apiError);
+      console.error("[nextServerFetch] Error:", apiError);
     }
     throw error;
   }
