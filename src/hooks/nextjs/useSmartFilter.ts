@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type FilterValue = string | number | null | undefined;
 type NavigationMethod = "push" | "replace";
 
-export interface SmartFilterOptions {
+export interface NextFilterOptions {
   /** Debounce delay in milliseconds */
   debounce?: number;
 
@@ -24,7 +24,7 @@ export interface SmartFilterOptions {
   method?: NavigationMethod;
 }
 
-export interface SmartFilterConfig {
+export interface NextFilterConfig {
   /** URL parameter key for pagination */
   paginationKey?: string;
 
@@ -64,8 +64,8 @@ const BATCH_KEY = "___global_batch_update___";
  * - Clear all filters
  * - Pending update state
  */
-export const useSmartFilter = <T extends string = string>(
-  config: SmartFilterConfig = {},
+export const useNextFilter = <T extends string = string>(
+  config: NextFilterConfig = {},
 ) => {
   const {
     paginationKey = "page",
@@ -268,7 +268,7 @@ export const useSmartFilter = <T extends string = string>(
   // ============================================
 
   const updateFilter = useCallback(
-    (key: T, value: FilterValue, options: SmartFilterOptions | number = {}) => {
+    (key: T, value: FilterValue, options: NextFilterOptions | number = {}) => {
       if (isInvalidPagination(key, value)) return;
 
       const opt = typeof options === "number" ? { debounce: options } : options;
@@ -307,7 +307,7 @@ export const useSmartFilter = <T extends string = string>(
   const updateBatch = useCallback(
     (
       updates: Partial<Record<T, FilterValue>>,
-      options: SmartFilterOptions | number = {},
+      options: NextFilterOptions | number = {},
     ) => {
       if (Object.keys(updates).length === 0) return;
 
@@ -340,7 +340,7 @@ export const useSmartFilter = <T extends string = string>(
   // ============================================
 
   const toggleFilter = useCallback(
-    (key: T, value: string, options?: SmartFilterOptions) => {
+    (key: T, value: string, options?: NextFilterOptions) => {
       const currentValue = latestParamsRef.current.get(key);
       let values = currentValue ? currentValue.split(",").filter(Boolean) : [];
 
