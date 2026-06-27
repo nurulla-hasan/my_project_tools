@@ -4,7 +4,7 @@ import * as React from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useSmartFilter } from "@/hooks/useSmartFilter";
+import { useNextFilter } from "@/hooks/useNextFilter";
 
 interface SearchInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   filterKey?: string;
@@ -18,19 +18,10 @@ export function SearchInput({
   placeholder = "Search...",
   ...props
 }: SearchInputProps) {
-  const { getFilter, updateFilter } = useSmartFilter();
-  const filterValue = getFilter(filterKey);
-  const [search, setSearch] = React.useState(filterValue);
-
-  // Sync state if URL changes externally
-  React.useEffect(() => {
-    setSearch(filterValue);
-  }, [filterValue]);
+  const { getFilter, updateFilter } = useNextFilter();
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setSearch(value);
-    updateFilter(filterKey, value, { debounce });
+    updateFilter(filterKey, e.target.value, { debounce });
   };
 
   return (
@@ -38,7 +29,7 @@ export function SearchInput({
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         type="text"
-        value={search}
+        value={getFilter(filterKey)}
         onChange={handleSearchChange}
         placeholder={placeholder}
         className="pl-10"

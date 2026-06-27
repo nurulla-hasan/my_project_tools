@@ -20,7 +20,7 @@ export const StarRating = ({
   className,
 }: StarRatingProps) => {
   return (
-    <div className={cn(`flex items-center gap-${gap}`, className)}>
+    <div className={cn("flex items-center", className)} style={{ gap: `${gap}px` }}>
       {[...Array(totalStars)].map((_, index) => {
         const starValue = index + 1;
         const isActive = starValue <= rating;
