@@ -47,3 +47,7 @@ size: { xl: "h-12 gap-2 px-5 text-base" }
 
 # Responsive Design Rule
 1. ALWAYS follow a mobile-first approach. Use base Tailwind utility classes for mobile screens and apply breakpoints (sm:, md:, lg:) for larger screens.
+
+# TypeScript Error Handling Rule
+1. ALWAYS use `error: unknown` in `catch` blocks instead of `error: any` to satisfy strict linting rules.
+2. When extracting error messages, safely check the error type using `error instanceof Error ? error.message : "Fallback message"`.
