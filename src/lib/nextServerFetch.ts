@@ -206,10 +206,20 @@ export const nextServerFetch = async <T = any>(
         }
       });
     }
-
+    // if (!res.ok) {
+    //   const errorData = await res.json().catch(() => null);
+    //   const error = new Error(errorData?.message || `HTTP ${res.status}`) as ApiError;
+    //   error.status = res.status;
+    //   error.data = errorData;
+    //   throw error;
+    // }
     if (!res.ok) {
       const errorData = await res.json().catch(() => null);
-      const error = new Error(errorData?.message || `HTTP ${res.status}`) as ApiError;
+      const errorMessage = errorData?.errorSources 
+        ? `${errorData.message}: ${errorData.errorSources.map((e: any) => `${e.path} - ${e.message}`).join(", ")}`
+        : errorData?.message || `HTTP ${res.status}`;
+      const error = new Error(errorMessage) as ApiError;
+      console.error(`API Error (${res.status}):`, JSON.stringify(errorData, null, 2));
       error.status = res.status;
       error.data = errorData;
       throw error;
