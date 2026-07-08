@@ -42,6 +42,17 @@ export type ApiError = Error & {
   data: unknown;
 };
 
+const createApiError = (
+  message: string,
+  status: number,
+  data: unknown
+): ApiError => {
+  const error = new Error(message) as ApiError;
+  error.status = status;
+  error.data = data;
+  return error;
+};
+
 const isTokenExpired = (token: string): boolean => {
   try {
     const decoded: { exp: number } = jwtDecode(token);
@@ -137,11 +148,12 @@ export const nextServerFetch = async <T = any>(
     if (accessToken) {
       defaultHeaders.Authorization = `Bearer ${accessToken}`;
     } else {
-      return {
+      throw createApiError("Authorization token is required", 401, {
         success: false,
         message: "Authorization token is required",
-        status: 401,
-      } as T;
+        statusCode: 401,
+        data: null,
+      });
     }
   }
 
@@ -206,23 +218,13 @@ export const nextServerFetch = async <T = any>(
         }
       });
     }
-    // if (!res.ok) {
-    //   const errorData = await res.json().catch(() => null);
-    //   const error = new Error(errorData?.message || `HTTP ${res.status}`) as ApiError;
-    //   error.status = res.status;
-    //   error.data = errorData;
-    //   throw error;
-    // }
     if (!res.ok) {
       const errorData = await res.json().catch(() => null);
       const errorMessage = errorData?.errorSources 
         ? `${errorData.message}: ${errorData.errorSources.map((e: any) => `${e.path} - ${e.message}`).join(", ")}`
         : errorData?.message || `HTTP ${res.status}`;
-      const error = new Error(errorMessage) as ApiError;
       console.error(`API Error (${res.status}):`, JSON.stringify(errorData, null, 2));
-      error.status = res.status;
-      error.data = errorData;
-      throw error;
+      throw createApiError(errorMessage, res.status, errorData);
     }
 
     if (res.status === 204 || res.headers.get("content-length") === "0") {
