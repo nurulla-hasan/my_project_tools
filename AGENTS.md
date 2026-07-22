@@ -5,22 +5,17 @@ This version has breaking changes — APIs, conventions, and file structure may 
 <!-- END:nextjs-agent-rules -->
 
 
+<!-- Design Rules -->
 # 📚 Documentation & Knowledge Rules
 1. DO NOT rely on your pre-trained outdated knowledge.
 2. ALWAYS search and read the latest official documentation for React, Tailwind CSS, and Shadcn UI before generating or modifying code.
 
-# 🎨 Shadcn UI & Strict Styling Rules
-1. Shadcn components are fully pre-designed. Rely EXCLUSIVELY on their built-in props (e.g., `variant="default"`, `variant="outline"`, `size="sm"`, `size="icon"`).
-2. NEVER use the `className` prop on a Shadcn UI component to add margins, paddings, colors, typography, or any other styling. Keep the component completely pure.
-3. For layout, positioning, and spacing (e.g., flex, grid, gap), DO NOT add these utility classes directly to the Shadcn component. 
-4. Instead, wrap the Shadcn components in standard HTML elements (like `<div>` or `<section>`) and apply Tailwind layout utilities (`flex`, `grid`, `gap-4`, `space-y-4`, `items-center`, etc.) to those wrapper elements.
-5. Write clean, modular, and standard code adhering strictly to the latest Shadcn UI documentation.
-
-# 🧩 Component Variant Extension Rule
-1. NEVER use `className` on a shadcn component to change its appearance (size, color, spacing, typography).
-2. If you need a different look or size, EXTEND the component's `variant` or `size` options in its source file (e.g., `button.tsx`, `card.tsx`) using `cva()`.
-3. Add only what you actually need — don't pre-create unused variants.
-4. After adding a new variant/size, use it via props: `<Button size="xl">` or `<Button variant="hero">`. Never fall back to `className`.
+# 🎨 Shadcn UI Rules
+1. Shadcn components are pre-designed. Prefer built-in props like `variant` and `size` over ad-hoc styling.
+2. NEVER use `className` on a shadcn component to change appearance such as size, color, spacing, or typography.
+3. For layout and spacing, wrap the shadcn component in regular HTML elements and apply Tailwind utilities to the wrapper, not the component itself.
+4. If you need a new appearance, EXTEND the component's `variant` or `size` in its source file with `cva()`. Add only what you actually need.
+5. The same rule applies to any custom component that already uses `cva()` — extend variants, do not override with `className`.
 
 ✅ Correct:
 ```tsx
@@ -36,8 +31,6 @@ size: { xl: "h-12 gap-2 px-5 text-base" }
 <Button className="h-12 px-5 text-base">Book now</Button>
 ```
 
-5. Same principle applies to any shadcn or custom component with `cva()` — extend don't override.
-
 # 🎨 Color System Rules
 1. NEVER use hardcoded color values (e.g., `text-amber-500`, `bg-[#123456]`, `border-blue-300`, custom hex/rgb/oklch) directly on any component.
 2. ALWAYS use CSS variable-based colors: `text-primary`, `bg-muted`, `border-border`, etc. All colors must be defined in `globals.css`.
@@ -51,3 +44,5 @@ size: { xl: "h-12 gap-2 px-5 text-base" }
 # TypeScript Error Handling Rule
 1. ALWAYS use `error: unknown` in `catch` blocks instead of `error: any` to satisfy strict linting rules.
 2. When extracting error messages, safely check the error type using `error instanceof Error ? error.message : "Fallback message"`.
+
+<!-- End: Design rules -->
