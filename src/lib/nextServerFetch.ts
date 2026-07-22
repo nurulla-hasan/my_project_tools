@@ -1,220 +1,321 @@
-import "server-only";
+import { jwtDecode } from "jwt-decode";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-import { cookies } from "next/headers";
-import { cache } from "react";
+type UserRole = "USER" | "SURVEYOR" | "ADMIN";
 
-type AuthMode = "required" | "optional" | "none";
-
-type NextServerFetchOptions = Omit<RequestInit, "body"> & {
-  body?: unknown;
-  auth?: AuthMode;
-  next?: NextFetchRequestConfig;
+type TokenPayload = {
+  exp?: number;
+  role?: unknown;
 };
 
-type ErrorSource = {
-  path?: string | number;
-  message?: string;
+type AuthTokens = {
+  accessToken: string;
+  refreshToken: string;
 };
 
-type ErrorResponse = {
-  message?: string;
-  errorSources?: ErrorSource[];
+const REFRESH_BUFFER_SECONDS = 30;
+const REMEMBER_ME_MAX_AGE = 30 * 24 * 60 * 60;
+
+// Temporary: keep route protection off while the authenticated flow is being built.
+const ROUTE_PROTECTION_ENABLED = false;
+
+const AUTH_ROUTES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-code",
+] as const;
+
+const PRIVATE_ROUTES = [
+  "/tools",
+  "/community",
+  "/join-as-surveyor",
+] as const;
+
+const ROLE_HOME: Record<UserRole, string> = {
+  USER: "/dashboard",
+  SURVEYOR: "/surveyor/dashboard",
+  ADMIN: "/admin/dashboard",
 };
 
-export class ApiError extends Error {
-  status: number;
-  data: unknown;
-
-  constructor(message: string, status: number, data: unknown) {
-    super(message);
-
-    this.name = "ApiError";
-    this.status = status;
-    this.data = data;
-  }
-}
+const ROLE_ROUTES: Record<UserRole, string> = {
+  USER: "/dashboard",
+  SURVEYOR: "/surveyor",
+  ADMIN: "/admin",
+};
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null;
 };
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const prototype = Object.getPrototypeOf(value);
-
-  return prototype === Object.prototype || prototype === null;
+const isUserRole = (value: unknown): value is UserRole => {
+  return value === "USER" || value === "SURVEYOR" || value === "ADMIN";
 };
 
-const getAccessToken = cache(async (): Promise<string | null> => {
-  const cookieStore = await cookies();
+const matchesRoute = (
+  pathname: string,
+  route: string,
+): boolean => {
+  return pathname === route || pathname.startsWith(`${route}/`);
+};
 
-  return cookieStore.get("accessToken")?.value ?? null;
-});
+const matchesAnyRoute = (
+  pathname: string,
+  routes: readonly string[],
+): boolean => {
+  return routes.some((route) => matchesRoute(pathname, route));
+};
 
-const parseJsonResponse = async (response: Response): Promise<unknown> => {
-  if (response.status === 204) {
-    return null;
-  }
-
-  const responseText = await response.text();
-
-  if (!responseText) {
-    return null;
-  }
-
+const getTokenPayload = (token: string): TokenPayload | null => {
   try {
-    return JSON.parse(responseText);
+    return jwtDecode<TokenPayload>(token);
   } catch {
-    throw new ApiError(
-      "API returned an invalid JSON response",
-      response.status,
-      null,
-    );
+    return null;
   }
 };
 
-const buildErrorMessage = (errorData: unknown, status: number): string => {
-  if (!isObject(errorData)) {
-    return `Request failed with status ${status}`;
-  }
+const getTokenExpiry = (token: string): number | null => {
+  const payload = getTokenPayload(token);
 
-  const data = errorData as ErrorResponse;
-
-  const baseMessage =
-    typeof data.message === "string" && data.message.trim()
-      ? data.message.trim()
-      : `Request failed with status ${status}`;
-
-  const errorSources = Array.isArray(data.errorSources)
-    ? data.errorSources
-    : [];
-
-  const details = errorSources
-    .map((source) => {
-      const message =
-        typeof source.message === "string" ? source.message.trim() : "";
-
-      if (!message || message === baseMessage) {
-        return null;
-      }
-
-      const path =
-        typeof source.path === "string" || typeof source.path === "number"
-          ? String(source.path).trim()
-          : "";
-
-      return path ? `${path} - ${message}` : message;
-    })
-    .filter(
-      (value, index, values): value is string =>
-        Boolean(value) && values.indexOf(value) === index,
-    );
-
-  return details.length ? `${baseMessage}: ${details.join(", ")}` : baseMessage;
+  return typeof payload?.exp === "number" ? payload.exp : null;
 };
 
-const prepareBody = (
-  body: unknown,
-  headers: Headers,
-  method: string,
-): BodyInit | undefined => {
-  if (body === undefined || body === null) {
+const getTokenRole = (token: string): UserRole | null => {
+  const payload = getTokenPayload(token);
+
+  return isUserRole(payload?.role) ? payload.role : null;
+};
+
+const isTokenExpired = (token: string): boolean => {
+  const expiresAt = getTokenExpiry(token);
+
+  if (!expiresAt) {
+    return true;
+  }
+
+  const currentTime = Math.floor(Date.now() / 1000);
+
+  return expiresAt <= currentTime + REFRESH_BUFFER_SECONDS;
+};
+
+const getTokenMaxAge = (token: string): number | undefined => {
+  const expiresAt = getTokenExpiry(token);
+
+  if (!expiresAt) {
     return undefined;
   }
 
-  if (method === "GET" || method === "HEAD") {
-    throw new TypeError(`${method} requests cannot include a body`);
-  }
+  const currentTime = Math.floor(Date.now() / 1000);
+  const maxAge = expiresAt - currentTime;
 
-  if (
-    body instanceof FormData ||
-    body instanceof URLSearchParams ||
-    body instanceof Blob ||
-    body instanceof ArrayBuffer ||
-    ArrayBuffer.isView(body) ||
-    typeof body === "string"
-  ) {
-    return body as BodyInit;
-  }
-
-  if (isPlainObject(body) || Array.isArray(body)) {
-    if (!headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json");
-    }
-
-    return JSON.stringify(body);
-  }
-
-  throw new TypeError("Unsupported request body type");
+  return maxAge > 0 ? maxAge : undefined;
 };
 
-export const nextServerFetch = async <T>(
-  endpoint: string,
-  options: NextServerFetchOptions = {},
-): Promise<T> => {
-  const {
-    auth = "required",
-    body: rawBody,
-    headers: customHeaders,
-    method = "GET",
-    next,
-    ...requestOptions
-  } = options;
-
-  const normalizedMethod = method.toUpperCase();
-  const headers = new Headers(customHeaders);
-
-  /*
-   * Validate and prepare the body before reading cookies or
-   * making a network request. Invalid caller input therefore
-   * fails immediately.
-   */
-  const body = prepareBody(rawBody, headers, normalizedMethod);
-
-  const baseUrl = process.env.BASE_API_URL;
-
-  if (!baseUrl) {
-    throw new Error("BASE_API_URL is not defined");
+const getAuthTokens = (responseData: unknown): AuthTokens | null => {
+  if (!isObject(responseData) || !isObject(responseData.data)) {
+    return null;
   }
 
-  const accessToken = auth === "none" ? null : await getAccessToken();
+  const { accessToken, refreshToken } = responseData.data;
 
-  if (auth === "required" && !accessToken) {
-    throw new ApiError("Authorization token is required", 401, {
-      success: false,
-      message: "Authorization token is required",
-      statusCode: 401,
-      data: null,
-    });
+  if (
+    typeof accessToken !== "string" ||
+    !accessToken ||
+    typeof refreshToken !== "string" ||
+    !refreshToken
+  ) {
+    return null;
   }
 
-  if (accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
+  return {
+    accessToken,
+    refreshToken,
+  };
+};
+
+const refreshAuthTokens = async (
+  baseUrl: string,
+  refreshToken: string,
+  rememberMe: boolean,
+): Promise<AuthTokens | null> => {
+  try {
+    const response = await fetch(
+      `${baseUrl}/auth/refresh-token`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          refreshToken,
+          rememberMe,
+        }),
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const responseData: unknown = await response.json();
+
+    return getAuthTokens(responseData);
+  } catch (error: unknown) {
+    void error;
+
+    return null;
   }
+};
 
-  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
-  const normalizedEndpoint = endpoint.replace(/^\/+/, "");
+const createForwardedResponse = (request: NextRequest): NextResponse => {
+  const requestHeaders = new Headers(request.headers);
 
-  const response = await fetch(`${normalizedBaseUrl}/${normalizedEndpoint}`, {
-    ...requestOptions,
-    method: normalizedMethod,
-    headers,
-    ...(body !== undefined ? { body } : {}),
-    ...(next ? { next } : {}),
+  requestHeaders.set("cookie", request.cookies.toString());
+
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
+};
+
+const setAuthCookies = (
+  response: NextResponse,
+  tokens: AuthTokens,
+  rememberMe: boolean,
+): void => {
+  const accessTokenMaxAge = getTokenMaxAge(tokens.accessToken);
+  const refreshTokenMaxAge = rememberMe
+    ? getTokenMaxAge(tokens.refreshToken) ?? REMEMBER_ME_MAX_AGE
+    : undefined;
+
+  response.cookies.set("accessToken", tokens.accessToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    ...(accessTokenMaxAge ? { maxAge: accessTokenMaxAge } : {}),
   });
 
-  const responseData = await parseJsonResponse(response);
+  response.cookies.set("refreshToken", tokens.refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    ...(refreshTokenMaxAge ? { maxAge: refreshTokenMaxAge } : {}),
+  });
+};
 
-  if (!response.ok) {
-    throw new ApiError(
-      buildErrorMessage(responseData, response.status),
-      response.status,
-      responseData,
-    );
+const deleteAuthCookies = (response: NextResponse): void => {
+  response.cookies.delete("accessToken");
+  response.cookies.delete("refreshToken");
+};
+
+const getRouteRedirect = (
+  request: NextRequest,
+  role: UserRole | null,
+): URL | null => {
+  const { pathname, search } = request.nextUrl;
+  const isAuthRoute = matchesAnyRoute(pathname, AUTH_ROUTES);
+  const isPrivateRoute = matchesAnyRoute(pathname, PRIVATE_ROUTES);
+  const requiredRole = (
+    Object.entries(ROLE_ROUTES) as Array<[UserRole, string]>
+  ).find(([, route]) => matchesRoute(pathname, route))?.[0];
+
+  if (isAuthRoute && role) {
+    return new URL(ROLE_HOME[role], request.url);
   }
 
-  return responseData as T;
+  if ((isPrivateRoute || requiredRole) && !role) {
+    const loginUrl = new URL("/login", request.url);
+
+    loginUrl.searchParams.set(
+      "callbackUrl",
+      `${pathname}${search}`,
+    );
+
+    return loginUrl;
+  }
+
+  if (requiredRole && role && role !== requiredRole) {
+    return new URL(ROLE_HOME[role], request.url);
+  }
+
+  return null;
+};
+
+export async function proxy(request: NextRequest): Promise<NextResponse> {
+  let accessToken = request.cookies.get("accessToken")?.value;
+  const refreshToken = request.cookies.get("refreshToken")?.value;
+  const rememberMe = request.cookies.get("rememberMe")?.value === "true";
+
+  const baseUrl =
+    process.env.BASE_API_URL ?? process.env.NEXT_PUBLIC_BASE_API;
+
+  let refreshedTokens: AuthTokens | null = null;
+  let shouldClearAuth = false;
+
+  if ((!accessToken || isTokenExpired(accessToken)) && refreshToken && baseUrl) {
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+
+    refreshedTokens = await refreshAuthTokens(
+      normalizedBaseUrl,
+      refreshToken,
+      rememberMe,
+    );
+
+    if (refreshedTokens) {
+      accessToken = refreshedTokens.accessToken;
+      request.cookies.set("accessToken", refreshedTokens.accessToken);
+      request.cookies.set("refreshToken", refreshedTokens.refreshToken);
+    } else {
+      accessToken = undefined;
+      shouldClearAuth = true;
+    }
+  } else if (accessToken && isTokenExpired(accessToken)) {
+    accessToken = undefined;
+    shouldClearAuth = true;
+  }
+
+  let role =
+    accessToken && !isTokenExpired(accessToken)
+      ? getTokenRole(accessToken)
+      : null;
+
+  if (accessToken && !role) {
+    accessToken = undefined;
+    role = null;
+    shouldClearAuth = true;
+  }
+
+  if (shouldClearAuth) {
+    request.cookies.delete("accessToken");
+    request.cookies.delete("refreshToken");
+  }
+
+  const redirectUrl = ROUTE_PROTECTION_ENABLED
+    ? getRouteRedirect(request, role)
+    : null;
+  const response = redirectUrl
+    ? NextResponse.redirect(redirectUrl)
+    : refreshedTokens || shouldClearAuth
+      ? createForwardedResponse(request)
+      : NextResponse.next();
+
+  if (refreshedTokens) {
+    setAuthCookies(response, refreshedTokens, rememberMe);
+  } else if (shouldClearAuth) {
+    deleteAuthCookies(response);
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|assets|.*\\..*).*)",
+  ],
 };
