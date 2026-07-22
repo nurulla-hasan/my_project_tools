@@ -1,276 +1,220 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import "server-only";
-import { jwtDecode } from "jwt-decode";
-import { revalidateTag, updateTag } from "next/cache";
+
 import { cookies } from "next/headers";
 import { cache } from "react";
 
-type CookieMapping = {
-  /** dot-notation path in JSON response body, e.g. "data.accessToken" */
-  responsePath: string;
-  /** cookie name to store the value under, e.g. "accessToken" */
-  cookieName: string;
-};
+type AuthMode = "required" | "optional" | "none";
 
 type NextServerFetchOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
-  isPublic?: boolean;
-  /**
-   * Persist cookies from JSON response body.
-   * e.g. [{ responsePath: "data.accessToken", cookieName: "accessToken" }]
-   */
-  setCookies?: CookieMapping[];
-  /**
-   * Persist cookies from Set-Cookie response header (for APIs that send tokens in headers).
-   * Only saves "accessToken" and "refreshToken" named cookies.
-   */
-  persistCookies?: boolean;
-  revalidate?: number | false;
-  tags?: string[];
-  /**
-   * "updateTag": immediate expiration, best for Server Actions.
-   * "revalidateTag": stale-while-revalidate, best for background updates.
-   */
-  invalidateMode?: "updateTag" | "revalidateTag";
-  updateTag?: string | string[];
+  auth?: AuthMode;
   next?: NextFetchRequestConfig;
-  responseType?: "json" | "text";
 };
 
-export type ApiError = Error & {
+type ErrorSource = {
+  path?: string | number;
+  message?: string;
+};
+
+type ErrorResponse = {
+  message?: string;
+  errorSources?: ErrorSource[];
+};
+
+export class ApiError extends Error {
   status: number;
   data: unknown;
-};
 
-const createApiError = (
-  message: string,
-  status: number,
-  data: unknown
-): ApiError => {
-  const error = new Error(message) as ApiError;
-  error.status = status;
-  error.data = data;
-  return error;
-};
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
 
-const isTokenExpired = (token: string): boolean => {
-  try {
-    const decoded: { exp: number } = jwtDecode(token);
-    return decoded.exp * 1000 < Date.now();
-  } catch {
-    return true;
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
   }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null;
 };
 
-const _getValidAccessTokenImpl = async (baseUrl: string): Promise<string | null> => {
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+
+  return prototype === Object.prototype || prototype === null;
+};
+
+const getAccessToken = cache(async (): Promise<string | null> => {
   const cookieStore = await cookies();
-  let accessToken = cookieStore.get("accessToken")?.value;
 
-  if (accessToken && !isTokenExpired(accessToken)) {
-    return accessToken;
-  }
+  return cookieStore.get("accessToken")?.value ?? null;
+});
 
-  const refreshToken = cookieStore.get("refreshToken")?.value;
-  if (!refreshToken) {
+const parseJsonResponse = async (response: Response): Promise<unknown> => {
+  if (response.status === 204) {
     return null;
   }
 
-  const rememberMe = cookieStore.get("rememberMe")?.value === "true";
+  const responseText = await response.text();
 
-  const res = await fetch(`${baseUrl}/auth/refresh-token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ refreshToken, rememberMe }),
-  });
-
-  if (!res.ok) {
-    return null;
-  }
-
-  const result = await res.json().catch(() => null);
-  accessToken = result?.data?.accessToken;
-
-  if (!accessToken) {
+  if (!responseText) {
     return null;
   }
 
   try {
-    cookieStore.set("accessToken", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      ...(rememberMe ? { maxAge: 30 * 24 * 60 * 60 } : {}),
-    });
+    return JSON.parse(responseText);
   } catch {
-    // Some server contexts do not allow writing cookies.
+    throw new ApiError(
+      "API returned an invalid JSON response",
+      response.status,
+      null,
+    );
   }
-
-  return accessToken;
 };
 
-/**
- * Cached version of getValidAccessToken - memoized per request.
- * Ensures cookies() and token refresh logic runs only ONCE per render.
- */
-const getValidAccessToken = cache(_getValidAccessTokenImpl);
+const buildErrorMessage = (errorData: unknown, status: number): string => {
+  if (!isObject(errorData)) {
+    return `Request failed with status ${status}`;
+  }
 
-export const nextServerFetch = async <T = any>(
+  const data = errorData as ErrorResponse;
+
+  const baseMessage =
+    typeof data.message === "string" && data.message.trim()
+      ? data.message.trim()
+      : `Request failed with status ${status}`;
+
+  const errorSources = Array.isArray(data.errorSources)
+    ? data.errorSources
+    : [];
+
+  const details = errorSources
+    .map((source) => {
+      const message =
+        typeof source.message === "string" ? source.message.trim() : "";
+
+      if (!message || message === baseMessage) {
+        return null;
+      }
+
+      const path =
+        typeof source.path === "string" || typeof source.path === "number"
+          ? String(source.path).trim()
+          : "";
+
+      return path ? `${path} - ${message}` : message;
+    })
+    .filter(
+      (value, index, values): value is string =>
+        Boolean(value) && values.indexOf(value) === index,
+    );
+
+  return details.length ? `${baseMessage}: ${details.join(", ")}` : baseMessage;
+};
+
+const prepareBody = (
+  body: unknown,
+  headers: Headers,
+  method: string,
+): BodyInit | undefined => {
+  if (body === undefined || body === null) {
+    return undefined;
+  }
+
+  if (method === "GET" || method === "HEAD") {
+    throw new TypeError(`${method} requests cannot include a body`);
+  }
+
+  if (
+    body instanceof FormData ||
+    body instanceof URLSearchParams ||
+    body instanceof Blob ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body) ||
+    typeof body === "string"
+  ) {
+    return body as BodyInit;
+  }
+
+  if (isPlainObject(body) || Array.isArray(body)) {
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    return JSON.stringify(body);
+  }
+
+  throw new TypeError("Unsupported request body type");
+};
+
+export const nextServerFetch = async <T>(
   endpoint: string,
-  options: NextServerFetchOptions = {}
+  options: NextServerFetchOptions = {},
 ): Promise<T> => {
   const {
-    isPublic = false,
+    auth = "required",
     body: rawBody,
-    headers,
+    headers: customHeaders,
     method = "GET",
-    revalidate = method.toUpperCase() === "GET" ? 3600 : 0,
-    updateTag: tagsToInvalidate,
-    invalidateMode = "updateTag",
-    tags,
     next,
-    setCookies,
-    persistCookies = false,
-    responseType = "json",
-    ...rest
+    ...requestOptions
   } = options;
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_API;
-  if (!baseUrl) throw new Error("NEXT_PUBLIC_BASE_API is not defined");
+  const normalizedMethod = method.toUpperCase();
+  const headers = new Headers(customHeaders);
 
-  const defaultHeaders: Record<string, string> = {};
+  /*
+   * Validate and prepare the body before reading cookies or
+   * making a network request. Invalid caller input therefore
+   * fails immediately.
+   */
+  const body = prepareBody(rawBody, headers, normalizedMethod);
 
-  if (!isPublic) {
-    const accessToken = await getValidAccessToken(baseUrl);
+  const baseUrl = process.env.BASE_API_URL;
 
-    if (accessToken) {
-      defaultHeaders.Authorization = `Bearer ${accessToken}`;
-    } else {
-      throw createApiError("Authorization token is required", 401, {
-        success: false,
-        message: "Authorization token is required",
-        statusCode: 401,
-        data: null,
-      });
-    }
+  if (!baseUrl) {
+    throw new Error("BASE_API_URL is not defined");
   }
 
-  let body = rawBody;
-  if (body && typeof body === "object" && !(body instanceof FormData)) {
-    body = JSON.stringify(body);
-    defaultHeaders["Content-Type"] = "application/json";
-  }
+  const accessToken = auth === "none" ? null : await getAccessToken();
 
-  try {
-    const res = await fetch(`${baseUrl}${endpoint}`, {
-      ...rest,
-      method,
-      ...(body ? { body: body as BodyInit } : {}),
-      headers: { ...defaultHeaders, ...headers },
-      next: {
-        revalidate,
-        tags,
-        ...next,
-      },
+  if (auth === "required" && !accessToken) {
+    throw new ApiError("Authorization token is required", 401, {
+      success: false,
+      message: "Authorization token is required",
+      statusCode: 401,
+      data: null,
     });
-
-    if (res.ok && tagsToInvalidate) {
-      const tagList = Array.isArray(tagsToInvalidate)
-        ? tagsToInvalidate
-        : [tagsToInvalidate];
-
-      tagList.forEach((tag) => {
-        try {
-          if (invalidateMode === "updateTag") {
-            updateTag(tag);
-          } else {
-            revalidateTag(tag, "max");
-          }
-        } catch {
-          revalidateTag(tag, "max");
-        }
-      });
-    }
-
-    // Persist tokens from Set-Cookie header (for APIs that send tokens in headers)
-    const setCookieHeader = res.headers.get("set-cookie");
-    if (persistCookies && setCookieHeader) {
-      const cookieStore = await cookies();
-      const cookiesArray = setCookieHeader.split(/,(?=[^;]+=[^;]+)/);
-      cookiesArray.forEach((cookieString) => {
-        if (!cookieString.includes("=")) return;
-        const parts = cookieString.split(";")[0].split("=");
-        const name = parts[0].trim();
-        const value = parts.slice(1).join("=");
-        if (name === "accessToken" || name === "refreshToken") {
-          try {
-            cookieStore.set(name, value, {
-              httpOnly: true,
-              secure: process.env.NODE_ENV === "production",
-              sameSite: "lax",
-              path: "/",
-            });
-          } catch {
-            // Some server contexts do not allow writing cookies.
-          }
-        }
-      });
-    }
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => null);
-      const errorMessage = errorData?.errorSources 
-        ? `${errorData.message}: ${errorData.errorSources.map((e: any) => `${e.path} - ${e.message}`).join(", ")}`
-        : errorData?.message || `HTTP ${res.status}`;
-      console.error(`API Error (${res.status}):`, JSON.stringify(errorData, null, 2));
-      throw createApiError(errorMessage, res.status, errorData);
-    }
-
-    if (res.status === 204 || res.headers.get("content-length") === "0") {
-      return null as T;
-    }
-
-    const responseText = await res.text();
-    let jsonResult: any = null;
-    try {
-      jsonResult = JSON.parse(responseText);
-    } catch {
-      // response is not valid JSON, skip
-    }
-
-    // Persist specific fields from the response body into cookies
-    if (setCookies && setCookies.length > 0 && jsonResult) {
-      const cookieStore = await cookies();
-      for (const { responsePath, cookieName } of setCookies) {
-        // Resolve dot-notation path, e.g. "data.accessToken"
-        const value = responsePath
-          .split(".")
-          .reduce((obj: any, key: string) => obj?.[key], jsonResult);
-
-        if (typeof value === "string" && value) {
-          try {
-            cookieStore.set(cookieName, value, {
-              httpOnly: true,
-              secure: process.env.NODE_ENV === "production",
-              sameSite: "lax",
-              path: "/",
-            });
-          } catch {
-            // Some server contexts do not allow writing cookies.
-          }
-        }
-      }
-    }
-
-    return responseType === "text"
-      ? (responseText as unknown as T)
-      : (jsonResult as T);
-  } catch (error: unknown) {
-    const apiError = error as ApiError;
-    if (apiError?.status !== 401) {
-      console.error("[nextServerFetch] Error:", apiError);
-    }
-    throw error;
   }
+
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  const normalizedEndpoint = endpoint.replace(/^\/+/, "");
+
+  const response = await fetch(`${normalizedBaseUrl}/${normalizedEndpoint}`, {
+    ...requestOptions,
+    method: normalizedMethod,
+    headers,
+    ...(body !== undefined ? { body } : {}),
+    ...(next ? { next } : {}),
+  });
+
+  const responseData = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new ApiError(
+      buildErrorMessage(responseData, response.status),
+      response.status,
+      responseData,
+    );
+  }
+
+  return responseData as T;
 };
