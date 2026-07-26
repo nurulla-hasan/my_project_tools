@@ -1,7 +1,6 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { cache } from "react";
 
 type AuthMode = "required" | "optional" | "none";
 
@@ -48,11 +47,11 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   return prototype === Object.prototype || prototype === null;
 };
 
-const getAccessToken = cache(async (): Promise<string | null> => {
+const getAccessToken = async (): Promise<string | null> => {
   const cookieStore = await cookies();
 
   return cookieStore.get("accessToken")?.value ?? null;
-});
+};
 
 const parseJsonResponse = async (response: Response): Promise<unknown> => {
   if (response.status === 204 || response.status === 205) {
