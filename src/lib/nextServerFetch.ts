@@ -165,13 +165,10 @@ const parseJsonResponse = async (response: Response): Promise<unknown> => {
   try {
     return JSON.parse(responseText);
   } catch {
-    throw new ApiError(
-      "API returned an invalid JSON response",
-      response.status,
-      {
-        rawResponse: responseText.slice(0, 500),
-      },
-    );
+    // Backend returned non-JSON (e.g. a rate-limit / proxy plain-text body
+    // like "Too many requests..."). Surface it as the error message instead
+    // of throwing — callers can then show it verbatim without crashing.
+    return { message: responseText.trim().slice(0, 500) };
   }
 };
 
