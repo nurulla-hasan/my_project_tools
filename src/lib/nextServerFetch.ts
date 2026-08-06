@@ -106,25 +106,25 @@ const setTokenCookies = async (
 // Exchange the refresh token for a fresh access token, and persist the new
 // pair in cookies. Returns null when there is nothing to refresh with.
 const refreshAccessToken = async (): Promise<string | null> => {
-  let refreshToken: string | null = null;
+  const cookieStore = await cookies();
+  const refreshToken =
+    cookieStore.get("refreshToken")?.value ?? null;
 
-  try {
-    const cookieStore = await cookies();
-
-    refreshToken = cookieStore.get("refreshToken")?.value ?? null;
-  } catch {
+  if (!refreshToken) {
     return null;
   }
 
-  if (!refreshToken) return null;
+  const baseUrl =
+    process.env.NEXT_PUBLIC_API_URL ??
+    process.env.NEXT_PUBLIC_BASE_API;
 
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL;
-
-  if (!baseUrl) return null;
+  if (!baseUrl) {
+    return null;
+  }
 
   try {
     const response = await fetch(
-      `${baseUrl.replace(/\/+$/, "")}/api/auth/refresh-token`,
+      `${baseUrl.replace(/\/+$/, "")}/refresh-token`,
       {
         method: "POST",
         headers: {
@@ -136,14 +136,22 @@ const refreshAccessToken = async (): Promise<string | null> => {
     );
 
     const result = (await response.json().catch(() => null)) as {
-      data?: { accessToken?: string; refreshToken?: string };
+      data?: {
+        accessToken?: string;
+        refreshToken?: string;
+      };
     } | null;
 
     const newAccessToken = result?.data?.accessToken;
 
-    if (!response.ok || !newAccessToken) return null;
+    if (!response.ok || !newAccessToken) {
+      return null;
+    }
 
-    await setTokenCookies(newAccessToken, result.data?.refreshToken);
+    await setTokenCookies(
+      newAccessToken,
+      result.data?.refreshToken,
+    );
 
     return newAccessToken;
   } catch {
@@ -295,6 +303,15 @@ export const nextServerFetch = async <T>(
     // Return the backend's success body verbatim — same as Postman.
     return responseData as ApiSuccess<T>;
   } catch (error) {
+    // Re-throw Next.js's dynamic-rendering bailout so routes that read
+    // cookies become dynamic automatically (no manual `force-dynamic`).
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { digest?: unknown }).digest
+    ) {
+      throw error;
+    }
     // ApiError is a normal runtime failure (e.g. invalid JSON response).
     // Anything else is a programming error (e.g. GET with a body, unsupported
     // body type) — log it so it is not silently swallowed during development.
