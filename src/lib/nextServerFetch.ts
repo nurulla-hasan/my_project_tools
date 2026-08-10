@@ -16,11 +16,7 @@ export type ApiSuccess<T> = {
   statusCode: number;
   message: string;
   data: T;
-  meta?: {
-    page: number;
-    limit: number;
-    total: number;
-  };
+  meta?: { page: number; limit: number; total: number };
 };
 
 export type ApiFailure = {
@@ -33,52 +29,36 @@ export type ApiFailure = {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiFailure;
 
-/**
- * The backend normally returns ApiResult<T>.
- *
- * A proxy, rate limiter, or external server may also return plain text
- * or an empty response. Those values are returned without modification.
- */
-export type BackendResponse<T> = ApiResult<T> | string | null;
-
 type RequestTokens = {
   accessToken: string | null;
   refreshToken: string | null;
 };
 
-type RefreshResult =
-  | {
-      success: true;
-      accessToken: string;
-      refreshToken?: string;
-      responseBody: unknown;
-      status: number;
-    }
-  | {
-      success: false;
-      responseBody: unknown;
-      status: number;
-    };
-
-const isObject = (
-  value: unknown,
-): value is Record<string, unknown> => {
-  return typeof value === "object" && value !== null;
+type RefreshTokenData = {
+  accessToken: string;
 };
 
-const isPlainObject = (
-  value: unknown,
-): value is Record<string, unknown> => {
-  if (!isObject(value)) {
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (!isObject(value)) return false;
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const isApiResult = <T>(value: unknown): value is ApiResult<T> => {
+  if (
+    !isObject(value) ||
+    typeof value.success !== "boolean" ||
+    typeof value.statusCode !== "number" ||
+    typeof value.message !== "string"
+  ) {
     return false;
   }
 
-  const prototype = Object.getPrototypeOf(value);
-
-  return (
-    prototype === Object.prototype ||
-    prototype === null
-  );
+  return value.success === false || "data" in value;
 };
 
 const getBaseUrl = (): string => {
@@ -87,10 +67,6 @@ const getBaseUrl = (): string => {
     process.env.NEXT_PUBLIC_BASE_API;
 
   if (!baseUrl) {
-    /**
-     * This is an application configuration error, not a backend response.
-     * Throw the original error instead of returning a fabricated API failure.
-     */
     throw new Error(
       "NEXT_PUBLIC_API_URL or NEXT_PUBLIC_BASE_API is not defined",
     );
@@ -99,84 +75,23 @@ const getBaseUrl = (): string => {
   return baseUrl.replace(/\/+$/, "");
 };
 
-/**
- * cookies() is intentionally not wrapped in try/catch.
- *
- * If Next.js throws a dynamic-rendering bailout during static prerendering,
- * the framework must receive and handle that error itself.
- */
+// Keep cookies() outside try/catch so Next.js can handle dynamic rendering.
 const getRequestTokens = async (): Promise<RequestTokens> => {
   const cookieStore = await cookies();
 
   return {
-    accessToken:
-      cookieStore.get("accessToken")?.value ?? null,
-    refreshToken:
-      cookieStore.get("refreshToken")?.value ?? null,
+    accessToken: cookieStore.get("accessToken")?.value ?? null,
+    refreshToken: cookieStore.get("refreshToken")?.value ?? null,
   };
 };
 
 const isExpired = (token: string): boolean => {
   try {
     const { exp } = jwtDecode<{ exp?: number }>(token);
-
-    return (
-      typeof exp !== "number" ||
-      exp * 1000 <= Date.now()
-    );
+    return typeof exp !== "number" || exp * 1000 <= Date.now();
   } catch {
-    /**
-     * A malformed token cannot be used safely,
-     * so it is intentionally treated as expired.
-     */
     return true;
   }
-};
-
-/**
- * Reads the backend response body without changing its semantic shape.
- *
- * JSON response -> parsed JSON value
- * Plain text    -> original string
- * Empty body    -> null
- *
- * If the backend declares JSON but sends invalid JSON,
- * the original JSON.parse error is allowed to throw.
- */
-const readBackendBody = async (
-  response: Response,
-): Promise<unknown> => {
-  if (
-    response.status === 204 ||
-    response.status === 205
-  ) {
-    return null;
-  }
-
-  const responseText = await response.text();
-
-  if (responseText.length === 0) {
-    return null;
-  }
-
-  const contentType =
-    response.headers
-      .get("content-type")
-      ?.toLowerCase() ?? "";
-
-  const isJsonResponse =
-    contentType.includes("application/json") ||
-    contentType.includes("+json");
-
-  if (isJsonResponse) {
-    return JSON.parse(responseText);
-  }
-
-  /**
-   * Plain text is returned as-is.
-   * It is not converted into an artificial { message } object.
-   */
-  return responseText;
 };
 
 const prepareBody = (
@@ -184,38 +99,20 @@ const prepareBody = (
   headers: Headers,
   method: string,
 ): BodyInit | undefined => {
-  if (body === undefined || body === null) {
-    return undefined;
-  }
+  if (body == null) return undefined;
 
   if (method === "GET" || method === "HEAD") {
-    /**
-     * This is a caller/programming error, not a backend API failure.
-     */
-    throw new TypeError(
-      `${method} requests cannot include a body`,
-    );
+    throw new TypeError(`${method} requests cannot include a body`);
   }
 
   if (body instanceof FormData) {
-    /**
-     * Do not manually set Content-Type for FormData.
-     * The runtime must generate the multipart boundary automatically.
-     */
     headers.delete("Content-Type");
-
     return body;
   }
 
-  if (
-    isPlainObject(body) ||
-    Array.isArray(body)
-  ) {
+  if (isPlainObject(body) || Array.isArray(body)) {
     if (!headers.has("Content-Type")) {
-      headers.set(
-        "Content-Type",
-        "application/json",
-      );
+      headers.set("Content-Type", "application/json");
     }
 
     return JSON.stringify(body);
@@ -231,87 +128,49 @@ const prepareBody = (
     return body as BodyInit;
   }
 
-  throw new TypeError(
-    "Unsupported request body type",
-  );
+  throw new TypeError("Unsupported request body type");
 };
 
-/**
- * Refreshes the access token without modifying the backend response body.
- *
- * Network errors, fetch errors, and Next.js framework errors are not caught.
- * They propagate to the original caller unchanged.
- */
+// Returns valid backend JSON unchanged. Invalid response contracts throw.
+const readApiResult = async <T>(
+  response: Response,
+): Promise<ApiResult<T>> => {
+  const body: unknown = await response.json();
+
+  if (!isApiResult<T>(body)) {
+    throw new TypeError(
+      `Backend response does not match ApiResult contract (HTTP ${response.status})`,
+    );
+  }
+
+  return body;
+};
+
 const refreshAccessToken = async (
   refreshToken: string,
   baseUrl: string,
-): Promise<RefreshResult> => {
+): Promise<ApiResult<RefreshTokenData>> => {
   const response = await fetch(
-    `${baseUrl}/refresh-token`,
+    `${baseUrl}/api/auth/refresh-token`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken }),
       cache: "no-store",
     },
   );
 
-  const responseBody =
-    await readBackendBody(response);
-
-  if (!response.ok) {
-    return {
-      success: false,
-      status: response.status,
-      responseBody,
-    };
-  }
-
-  const data =
-    isObject(responseBody) &&
-    isObject(responseBody.data)
-      ? responseBody.data
-      : null;
-
-  const newAccessToken =
-    data &&
-    typeof data.accessToken === "string"
-      ? data.accessToken
-      : null;
-
-  const newRefreshToken =
-    data &&
-    typeof data.refreshToken === "string"
-      ? data.refreshToken
-      : undefined;
-
-  /**
-   * If the backend returns a successful HTTP status without an access token,
-   * return the original backend body instead of creating a custom error body.
-   */
-  if (!newAccessToken) {
-    return {
-      success: false,
-      status: response.status,
-      responseBody,
-    };
-  }
-
-  return {
-    success: true,
-    status: response.status,
-    accessToken: newAccessToken,
-    refreshToken: newRefreshToken,
-    responseBody,
-  };
+  return readApiResult<RefreshTokenData>(response);
 };
 
+/**
+ * Returns the backend ApiResult unchanged.
+ * Network, malformed-response, runtime, and Next.js framework errors may throw.
+ */
 export const nextServerFetch = async <T>(
   endpoint: string,
   options: NextServerFetchOptions = {},
-): Promise<BackendResponse<T>> => {
+): Promise<ApiResult<T>> => {
   const {
     auth = "required",
     body: rawBody,
@@ -323,77 +182,50 @@ export const nextServerFetch = async <T>(
 
   const normalizedMethod = method.toUpperCase();
   const headers = new Headers(customHeaders);
-
-  const body = prepareBody(
-    rawBody,
-    headers,
-    normalizedMethod,
-  );
-
+  const body = prepareBody(rawBody, headers, normalizedMethod);
   const baseUrl = getBaseUrl();
 
   let accessToken: string | null = null;
 
   if (auth !== "none") {
     const tokens = await getRequestTokens();
-
     accessToken = tokens.accessToken;
 
-    const accessTokenIsUsable =
-      accessToken !== null &&
-      !isExpired(accessToken);
-
-    if (!accessTokenIsUsable) {
+    if (!accessToken || isExpired(accessToken)) {
       accessToken = null;
 
       if (tokens.refreshToken) {
-        const refreshResult =
-          await refreshAccessToken(
-            tokens.refreshToken,
-            baseUrl,
-          );
+        const refreshResult = await refreshAccessToken(
+          tokens.refreshToken,
+          baseUrl,
+        );
 
         if (refreshResult.success) {
-          /**
-           * The refreshed access token is used for the current backend request.
-           *
-           * Cookies are not written here because this utility may run during
-           * Server Component rendering. Cookie persistence should be handled
-           * by Proxy, a Route Handler, or a Server Action.
-           */
-          accessToken =
-            refreshResult.accessToken;
+          const refreshedAccessToken =
+            refreshResult.data.accessToken;
+
+          if (typeof refreshedAccessToken !== "string") {
+            throw new TypeError(
+              "Refresh response does not contain a valid accessToken",
+            );
+          }
+
+          // Used for this request only. Cookie persistence is handled by Proxy.
+          accessToken = refreshedAccessToken;
         } else if (auth === "required") {
-          /**
-           * Return the refresh endpoint's original backend response body.
-           * Do not replace it with a custom 401 or 500 response.
-           */
-          return refreshResult.responseBody as BackendResponse<T>;
+          return refreshResult;
         }
       }
     }
   }
 
   if (accessToken) {
-    headers.set(
-      "Authorization",
-      `Bearer ${accessToken}`,
-    );
+    headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  const normalizedEndpoint =
-    endpoint.replace(/^\/+/, "");
+  const normalizedEndpoint = endpoint.replace(/^\/+/, "");
 
-  /**
-   * No try/catch is used here.
-   *
-   * The following errors therefore propagate unchanged:
-   * - Next.js dynamic-rendering bailouts
-   * - Network failures
-   * - Abort errors
-   * - Native fetch errors
-   * - Runtime errors
-   */
+  // No try/catch: network, runtime, abort and Next.js errors stay real.
   const response = await fetch(
     `${baseUrl}/${normalizedEndpoint}`,
     {
@@ -405,13 +237,6 @@ export const nextServerFetch = async <T>(
     },
   );
 
-  /**
-   * The response body is returned without checking response.ok.
-   *
-   * Whether the backend responds with 200, 400, 401, 404, or 500,
-   * the original response body is returned without modification.
-   */
-  return (await readBackendBody(
-    response,
-  )) as BackendResponse<T>;
+  // Both backend success and failure responses follow ApiResult.
+  return readApiResult<T>(response);
 };
