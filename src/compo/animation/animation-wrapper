@@ -18,6 +18,7 @@ interface AnimationWrapperProps {
   /** @default false */
   once?: boolean
   as?: "div" | "section" | "span"
+  layout?: boolean | "size" | "position" | "preserve-aspect" | "x" | "y"
 }
 
 const directionVariants = {
@@ -36,11 +37,13 @@ export default function AnimationWrapper({
   duration = 0.6,
   once = false,
   as = "div",
+  layout,
 }: AnimationWrapperProps) {
   const MotionTag = motion[as]
 
   return (
     <MotionTag
+      layout={layout}
       className={cn(className)}
       initial={{ opacity: 0, ...directionVariants[direction], scale: direction === "none" ? 0.95 : 1 }}
       whileInView={{
