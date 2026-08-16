@@ -3,13 +3,30 @@ import "server-only";
 import { jwtDecode } from "jwt-decode";
 import { cookies } from "next/headers";
 
-type AuthMode = "required" | "optional" | "none";
+type AuthMode = "auth" | "none";
 
 type NextServerFetchOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
-  auth?: AuthMode;
+  auth: AuthMode;
   next?: NextFetchRequestConfig;
 };
+
+// nextServerFetch returns these verbatim, so callers see the same shape as Postman.
+export type ApiSuccess<T> = {
+  success: true;
+  statusCode: number;
+  message: string;
+  data: T;
+  meta?: { page: number; limit: number; total: number };
+};
+
+export type ApiFailure = {
+  success: false;
+  statusCode: number;
+  message: string;
+};
+
+export type ApiResult<T> = ApiSuccess<T> | ApiFailure;
 
 type RefreshResponse = {
   data?: {
@@ -21,9 +38,7 @@ const getBaseUrl = (): string => {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
   if (!baseUrl) {
-    throw new Error(
-      "NEXT_PUBLIC_API_URL is not defined", 
-    );
+    throw new Error("NEXT_PUBLIC_API_URL is not defined");
   }
 
   return baseUrl;
@@ -52,22 +67,17 @@ const getRequestTokens = async () => {
 const refreshAccessToken = async (
   refreshToken: string,
 ): Promise<string | null> => {
-  const response = await fetch(
-    `${getBaseUrl()}/auth/refresh-token`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
-      cache: "no-store",
-    },
-  );
+  const response = await fetch(`${getBaseUrl()}/auth/refresh-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken }),
+    cache: "no-store",
+  });
 
   const result = (await response.json()) as RefreshResponse;
   const accessToken = result.data?.accessToken;
 
-  return typeof accessToken === "string"
-    ? accessToken
-    : null;
+  return typeof accessToken === "string" ? accessToken : null;
 };
 
 const isPlainObject = (
@@ -101,47 +111,57 @@ const prepareBody = (
   return body as BodyInit;
 };
 
-/**
- * Thin server-side wrapper around Next.js fetch.
- * Returns the backend JSON response unchanged.
- * Network, runtime, JSON parsing, and Next.js errors may throw.
- */
 export const nextServerFetch = async <T = unknown>(
   endpoint: string,
-  options: NextServerFetchOptions = {},
-): Promise<T> => {
-  const {
-    auth = "required",
-    body: rawBody,
-    headers: customHeaders,
-    next,
-    ...requestOptions
-  } = options;
+  options: NextServerFetchOptions,
+): Promise<ApiResult<T>> => {
+  try {
+    const {
+      auth,
+      body: rawBody,
+      headers: customHeaders,
+      next,
+      ...requestOptions
+    } = options;
 
-  const headers = new Headers(customHeaders);
-  const body = prepareBody(rawBody, headers);
+    const headers = new Headers(customHeaders);
+    const body = prepareBody(rawBody, headers);
 
-  if (auth !== "none") {
-    const tokens = await getRequestTokens();
-    let accessToken = tokens.accessToken;
+    if (auth === "auth") {
+      const tokens = await getRequestTokens();
+      let accessToken = tokens.accessToken;
 
-    if (!accessToken || isExpired(accessToken)) {
-      accessToken = tokens.refreshToken
-        ? await refreshAccessToken(tokens.refreshToken)
-        : null;
-    }
+      if (!accessToken || isExpired(accessToken)) {
+        accessToken = tokens.refreshToken
+          ? await refreshAccessToken(tokens.refreshToken)
+          : null;
+      }
 
-    if (accessToken) {
+      if (!accessToken) {
+        return {
+          success: false,
+          statusCode: 401,
+          message: "Authentication required",
+        };
+      }
+
       headers.set("Authorization", `Bearer ${accessToken}`);
     }
+
+    const response = await fetch(`${getBaseUrl()}${endpoint}`, {
+      ...requestOptions,
+      headers,
+      ...(body !== undefined ? { body } : {}),
+      ...(next ? { next } : {}),
+    });
+
+    return (await response.json()) as ApiResult<T>;
+  } catch (error) {
+    return {
+      success: false,
+      statusCode: 500,
+      message:
+        error instanceof Error ? error.message : "An unexpected error occurred",
+    };
   }
-
-  const response = await fetch(`${getBaseUrl()}${endpoint}`, {
-    ...requestOptions,
-    headers,
-    ...(body !== undefined ? { body } : {}),
-    ...(next ? { next } : {}),
-  });
-
-  return response.json() as Promise<T>;
 };
